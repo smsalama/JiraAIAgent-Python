@@ -3656,13 +3656,13 @@ def display_dtedc_analysis():
     with col1:
         st.metric("Total Deliveries", results['total_in_scope'])
     with col2:
-        st.metric("Completion Rate", f"{results['metrics']['completion_rate']['percentage']}%", f"{results['metrics']['completion_rate']['count']} stories")
+        st.metric("Completion Rate", f"{results['metrics']['completion_rate']['percentage']}%", f"{results['metrics']['completion_rate']['count']} deliveries")
     with col3:
-        st.metric("Cancelled Rate", f"{results['metrics']['cancelled_rate']['percentage']}%", f"{results['metrics']['cancelled_rate']['count']} stories")
+        st.metric("Cancelled Rate", f"{results['metrics']['cancelled_rate']['percentage']}%", f"{results['metrics']['cancelled_rate']['count']} deliveries")
     with col4:
-        st.metric("On Time Rate", f"{results['metrics']['on_time_rate']['percentage']}%", f"{results['metrics']['on_time_rate']['count']} stories")
+        st.metric("On Time Rate", f"{results['metrics']['on_time_rate']['percentage']}%", f"{results['metrics']['on_time_rate']['count']} deliveries")
     with col5:
-        st.metric("Delay Rate", f"{results['metrics']['delay_rate']['percentage']}%", f"{results['metrics']['delay_rate']['count']} stories", delta_color="inverse")
+        st.metric("Delay Rate", f"{results['metrics']['delay_rate']['percentage']}%", f"{results['metrics']['delay_rate']['count']} deliveries")
 
     st.subheader("📈 Delivery Breakdown")
     if results['parent_delivery_summary']:
@@ -3712,6 +3712,7 @@ def display_dtedc_analysis():
             st.header("Operations Delivery Breakdown")
             #fig = px.pie(grouped_df, values='Total Count', names='Parent')
             # Create bar chart
+            
             fig = px.bar(
                 grouped_df,
                 x='Parent',
@@ -3720,9 +3721,50 @@ def display_dtedc_analysis():
                 color_discrete_sequence=['#0033A0']  # IQVIA blue
             )
 
-            # Rotate x-axis labels
-            fig.update_layout(xaxis_tickangle=-45)
-            fig.update_traces(textposition='outside')
+            # Update layout with fixed dimensions and larger, clearer text
+            fig.update_layout(
+                # Fixed dimensions
+                width=600,
+                height=600,
+                autosize=False,  # Prevents automatic resizing
+                
+                # X-axis styling
+                xaxis=dict(
+                    tickangle=-45,
+                    tickfont=dict(size=14, color='black', family='Arial Black'),
+                    title=dict(
+                        text='Parent',
+                        font=dict(size=16, color='black', family='Arial Black')
+                    )
+                ),
+                
+                # Y-axis styling
+                yaxis=dict(
+                    tickfont=dict(size=14, color='black', family='Arial Black'),
+                    title=dict(
+                        text='Total Deliveries',
+                        font=dict(size=16, color='black', family='Arial Black')
+                    ),
+                    showgrid=True,
+                    gridcolor='lightgray'
+                ),
+                
+                # Layout properties
+                plot_bgcolor='white',
+                margin=dict(l=80, r=60, t=80, b=120),  # Extra bottom margin for rotated labels
+                dragmode=False  # Prevents dragging/resizing
+            )
+            
+            # Update bar text properties: make bold and increase font size
+            fig.update_traces(
+                textposition='outside',
+                textfont=dict(
+                    size=18,  # Larger font size for bar labels
+                    family="Arial Black, sans-serif",  # Bold font family
+                    color='black'
+                )
+            )
+            
             st.plotly_chart(fig)
             
     # Define the data
@@ -4367,11 +4409,14 @@ def handle_country_mapping(df):
     }
     
     # Apply country mapping
-    if 'country' not in df.columns or df['country'].isna().any():
+    if 'country' not in df.columns:
         # Use reporting_country if country is empty
         if 'reporting_country' in df.columns:
             df['country'] = df['country'].fillna(df['reporting_country'])
-    
+    elif 'country' in df.columns and (df['country'].isna().any() or (df['country'] == 'None').any()):
+        if 'reporting_country' in df.columns:            
+            df['country'] = df['country'].replace('None', pd.NA)
+            df['country'] = df['country'].fillna(df['reporting_country'])
     
     # Apply issue-specific country mapping
     for issue_key, country in issue_country_map.items():
@@ -4451,39 +4496,50 @@ def create_resolved_items_chart(df, start_date, end_date, colors):
             marker_color=month_colors[i % len(month_colors)],
             text=month_data['Count'],
             textposition='outside',
-            textfont=dict(size=14, color='black', family='Arial Black'),
-            width=0.2  # Narrow bars
+            textfont=dict(size=14, color='black', family='Arial Black'),  # Slightly smaller text
+            width=0.15  # Much smaller bars to prevent overlapping
         ))
-    
-    # Update layout
+
+    # Update layout with proper spacing for grouped bars
     fig.update_layout(
-        #title={
-        #    'font': dict(size=20, color='black', family='Arial Black'),
-        #    'x': 0.5,
-        #    'xanchor': 'center'
-        #},
         xaxis=dict(
-            tickfont=dict(size=14, color='black', family='Arial Black'),
+            tickfont=dict(size=12, color='black', family='Arial Black'),  # Smaller tick font
             categoryorder='array',
-            categoryarray=categories
+            categoryarray=categories,
+            title=dict(
+                text='',  # Remove axis title to save space
+                font=dict(size=12, color='black', family='Arial Black')
+            )
         ),
         yaxis=dict(
             showgrid=True,
-            gridcolor='lightgray'
+            gridcolor='lightgray',
+            tickfont=dict(size=12, color='black', family='Arial'),
+            title=dict(
+                text='Count',
+                font=dict(size=12, color='black', family='Arial Black')
+            )
         ),
         barmode='group',
-        bargap=0.3,  # Space between groups
-        bargroupgap=0.1,  # Space within groups
+        bargap=0.4,  # More space between category groups
+        bargroupgap=0.05,  # Less space within groups for tighter clustering
         plot_bgcolor='white',
         showlegend=True,
         legend=dict(
             orientation='h',
             yanchor='bottom',
             y=1.02,
-            xanchor='right',
-            x=1
+            xanchor='center',
+            x=0.5,
+            font=dict(size=10, color='black', family='Arial')  # Smaller legend font
         ),
-        height=600
+        # Fixed dimensions - prevents resizing
+        width=600,
+        height=600,
+        autosize=False,  # Prevents automatic resizing
+        margin=dict(l=50, r=40, t=60, b=50),  # Tighter margins for 600px width
+        # Ensure fixed sizing in Streamlit
+        dragmode=False  # Prevents dragging/resizing
     )
     
     return fig
@@ -4532,17 +4588,18 @@ def create_incidents_per_project_chart(df, start_date, end_date, colors):
         else:
             # Calculate from data
             month_data = df_incidents[df_incidents['resolution_month'] == month]
-            country_counts = month_data['country'].value_counts()
-            
-            for country, count in country_counts.items():
-                if count > 0:
-                    plot_data.append({
-                        'Month': month,
-                        'Country': country,
-                        'Count': count
-                    })
-                    if month == last_month:
-                        country_last_month_count[country] = count
+            if 'country' in month_data.columns:
+                country_counts = month_data['country'].value_counts()
+                
+                for country, count in country_counts.items():
+                    if count > 0:
+                        plot_data.append({
+                            'Month': month,
+                            'Country': country,
+                            'Count': count
+                        })
+                        if month == last_month:
+                            country_last_month_count[country] = count
     
     # Sort countries by last month count
     sorted_countries = sorted(country_last_month_count.keys(), 
@@ -4562,12 +4619,25 @@ def create_incidents_per_project_chart(df, start_date, end_date, colors):
     for i, month in enumerate(months):
         month_data = plot_df[plot_df['Month'] == month]
         
-        # Order by sorted countries
+        # Order by sorted countries - FIX: Convert Series to dict properly
         ordered_data = []
         for country in sorted_countries:
             country_data = month_data[month_data['Country'] == country]
             if not country_data.empty:
-                ordered_data.append(country_data.iloc[0])
+                # Convert Series to dictionary properly
+                row = country_data.iloc[0]
+                ordered_data.append({
+                    'Month': row['Month'],
+                    'Country': row['Country'],
+                    'Count': row['Count']
+                })
+            else:
+                # Add zero entry for missing data to maintain grouping
+                ordered_data.append({
+                    'Month': month,
+                    'Country': country,
+                    'Count': 0
+                })
         
         if ordered_data:
             ordered_df = pd.DataFrame(ordered_data)
@@ -4578,33 +4648,52 @@ def create_incidents_per_project_chart(df, start_date, end_date, colors):
                 x=ordered_df['Count'],
                 orientation='h',
                 marker_color=month_colors[i % len(month_colors)],
-                text=ordered_df['Count'],
+                text=[str(count) if count > 0 else '' for count in ordered_df['Count']],  # Hide zero labels
                 textposition='outside',
-                textfont=dict(size=14, color='black', family='Arial Black')
+                textfont=dict(size=14, color='black', family='Arial Black'),  # Slightly smaller text
+                width=0.15  # Much thinner bars to prevent overlap
             ))
     
-    # Update layout
+    # Update layout with proper grouping
     fig.update_layout(
         yaxis=dict(
-            tickfont=dict(size=14, color='black', family='Arial Black'),
+            tickfont=dict(size=11, color='black', family='Arial Black'),  # Smaller font
             categoryorder='array',
-            categoryarray=sorted_countries[::-1]  # Reverse for proper display
+            categoryarray=sorted_countries[::-1],  # Reverse for proper display
+            title=dict(
+                text='Projects',
+                font=dict(size=12, color='black', family='Arial Black')
+            )
         ),
         xaxis=dict(
             showgrid=True,
-            gridcolor='lightgray'
+            gridcolor='lightgray',
+            tickfont=dict(size=11, color='black', family='Arial'),
+            title=dict(
+                text='Incident Count',
+                font=dict(size=12, color='black', family='Arial Black')
+            ),
+            range=[0, max(plot_df['Count']) * 1.3] if len(plot_df) > 0 else [0, 1]  # Handle empty DataFrame
         ),
-        barmode='group',
+        barmode='group',  # Critical for proper grouping
+        bargap=0.3,  # Space between country groups
+        bargroupgap=0.05,  # Minimal space within month groups
         plot_bgcolor='white',
         showlegend=True,
         legend=dict(
             orientation='h',
             yanchor='bottom',
             y=1.02,
-            xanchor='right',
-            x=1
+            xanchor='center',
+            x=0.5,
+            font=dict(size=10, color='black', family='Arial')
         ),
-        height=600
+        # Fixed dimensions
+        width=600,
+        height=600,
+        autosize=False,  # Prevents automatic resizing
+        margin=dict(l=100, r=70, t=60, b=60),  # Adjusted margins
+        dragmode=False  # Prevents dragging/resizing
     )
     
     return fig
@@ -4643,10 +4732,10 @@ def create_incidents_by_priority_chart(df, start_date, end_date, colors):
     # Create figure
     fig = go.Figure()
     
-    # Create one trace per priority (not per month-priority combination)
+    # Create one trace per priority with ALL months data
     for priority in priority_order:
         x_values = []
-        y_values = []
+        y_values = []        
         text_values = []
         
         # Collect data for this priority across all months
@@ -4657,7 +4746,10 @@ def create_incidents_by_priority_chart(df, start_date, end_date, colors):
             else:
                 # Calculate from data
                 month_data = df_incidents[df_incidents['resolution_month'] == month]
-                count = len(month_data[month_data['priority'] == priority])
+                if 'priority' in month_data.columns:
+                    count = len(month_data[month_data['priority'] == priority])
+                else:
+                    count = 0
             
             x_values.append(count)
             y_values.append(month)
@@ -4667,41 +4759,54 @@ def create_incidents_by_priority_chart(df, start_date, end_date, colors):
         fig.add_trace(go.Bar(
             name=priority,
             x=x_values,
-            y=y_values,
+            y=y_values,  # All months for each priority
             orientation='h',
             marker_color=priority_colors[priority],
             text=text_values,
             textposition='outside',
-            textfont=dict(size=12, color='black')
+            textfont=dict(size=14, color='black', family='Arial Black'),  # Adjusted text size
+            width=0.2  # Much thinner bars to prevent overlap
         ))
                 
     fig.update_layout(
         yaxis=dict(
-            tickfont=dict(size=14, color='black', family='Arial Black'),
+            tickfont=dict(size=12, color='black', family='Arial Black'),
             categoryorder='array',
-            categoryarray=months[::-1]  # Reverse for proper display
+            categoryarray=months[::-1],  # Reverse for proper display
+            title=dict(
+                text='Months',
+                font=dict(size=14, color='black', family='Arial Black')
+            )
         ),
         xaxis=dict(
             showgrid=True,
             gridcolor='lightgray',
-            tickfont=dict(size=12)
+            tickfont=dict(size=12, color='black', family='Arial'),
+            title=dict(
+                text='Incident Count',
+                font=dict(size=14, color='black', family='Arial Black')
+            )
         ),
-        barmode='group',  # This creates separate bars for each priority (not stacked)
+        barmode='group',  # Groups bars side by side
         plot_bgcolor='white',
         paper_bgcolor='white',
-        height=400,
-        bargap=0.3,  # Space between month groups
-        bargroupgap=0.1,  # Space between bars within each group
+        # Fixed dimensions
+        width=600,
+        height=600,
+        autosize=False,  # Prevents automatic resizing
+        bargap=0.4,  # More space between month groups
+        bargroupgap=0.05,  # Small space between bars within each group
         legend=dict(
             orientation='v',  # Vertical legend
             yanchor='middle',
             y=0.5,
             xanchor='left',
             x=1.02,  # Position legend to the right
-            font=dict(size=12)
+            font=dict(size=11, color='black', family='Arial')
         ),
-        margin=dict(l=80, r=120, t=50, b=50),  # Adjust margins for legend
-        showlegend=True
+        margin=dict(l=60, r=120, t=40, b=60),  # More right margin for legend
+        showlegend=True,
+        dragmode=False  # Prevents dragging/resizing
     )
     
     return fig
@@ -4750,22 +4855,24 @@ def display_support_overview():
     # Create support overview
     results = create_support_overview(df, start_date, end_date)
     
+    
     # Display Task 1
     st.subheader("📈 Resolved Incidents, Requests and Changes")
-    st.plotly_chart(results['resolved_items_chart'], use_container_width=True)
+    st.plotly_chart(results['resolved_items_chart'], use_container_width=False, width=600, height=600)
+    
     
     # Display Task 2
     st.subheader("🌍 Incidents per Project")
-    st.plotly_chart(results['incidents_per_project_chart'], use_container_width=True)
+    st.plotly_chart(results['incidents_per_project_chart'], use_container_width=False)
     
     # Display Task 3
     st.subheader("🎯 Incidents by Priority")
-    st.plotly_chart(results['incidents_by_priority_chart'], use_container_width=True)
+    st.plotly_chart(results['incidents_by_priority_chart'], use_container_width=False)
     
     # Display Task 4
     st.subheader("🚨 Critical Incidents - Last Month")
     if not results['critical_incidents_table'].empty:
-        st.dataframe(results['critical_incidents_table'], use_container_width=True)
+        st.dataframe(results['critical_incidents_table'], use_container_width=True, hide_index=True)
     else:
         st.info("No critical incidents found for the last month.")
     
@@ -4798,6 +4905,7 @@ def create_response_resolution_analysis(df, start_date, end_date):
     
     # Prepare data
     df_prepared = prepare_response_resolution_data(df, start_date, end_date)
+
     # Get last month
     last_month = end_date.strftime('%B')
     # Task 1: First Response Time Overall Result - Last Month
@@ -4807,7 +4915,7 @@ def create_response_resolution_analysis(df, start_date, end_date):
     first_response_column = create_first_response_column_chart(df_prepared, start_date, end_date)
     
     # Task 3: First Response Time Scatter Chart - All Months
-    first_response_scatter_all = create_first_response_scatter_all(df_prepared, start_date, end_date)
+    #first_response_scatter_all = create_first_response_scatter_all(df_prepared, start_date, end_date)
     
     # Task 4: First Response Time Scatter Chart - Last Month
     first_response_scatter_month = create_first_response_scatter_month(df_prepared, last_month)
@@ -4819,7 +4927,7 @@ def create_response_resolution_analysis(df, start_date, end_date):
     resolution_time_column = create_resolution_time_column_chart(df_prepared, start_date, end_date)
     
     # Task 7: Resolution Time Scatter Chart - All Months
-    resolution_time_scatter_all = create_resolution_time_scatter_all(df_prepared, start_date, end_date)
+    #resolution_time_scatter_all = create_resolution_time_scatter_all(df_prepared, start_date, end_date)
     
     # Task 8: Resolution Time Scatter Chart - Last Month
     resolution_time_scatter_month = create_resolution_time_scatter_month(df_prepared, last_month)
@@ -4827,11 +4935,11 @@ def create_response_resolution_analysis(df, start_date, end_date):
     return {
         'first_response_table': first_response_table,
         'first_response_column': first_response_column,
-        'first_response_scatter_all': first_response_scatter_all,
+        #'first_response_scatter_all': first_response_scatter_all,
         'first_response_scatter_month': first_response_scatter_month,
         'resolution_time_table': resolution_time_table,
         'resolution_time_column': resolution_time_column,
-        'resolution_time_scatter_all': resolution_time_scatter_all,
+        #'resolution_time_scatter_all': resolution_time_scatter_all,
         'resolution_time_scatter_month': resolution_time_scatter_month
     }
 
@@ -4986,24 +5094,38 @@ def create_first_response_column_chart(df, start_date, end_date):
         y=plot_df['Average_Minutes'] + plot_df['Average_Seconds']/60,
         text=plot_df['Label'],
         textposition='outside',
-        textfont=dict(size=14, color='black', family='Arial Black'),
+        textfont=dict(size=16, color='black', family='Arial Black'),  # Larger text
         marker_color='darkblue',
-        name='Average Response Time'
+        name='Average Response Time',
+        width=0.4  # Much thinner bars
     ))
     
-    # Update layout
+    # Update layout with fixed dimensions
     fig.update_layout(
         xaxis=dict(
-            tickfont=dict(size=14, color='black', family='Arial Black')
+            tickfont=dict(size=14, color='black', family='Arial Black'),
+            title=dict(
+                text='Months',
+                font=dict(size=14, color='black', family='Arial Black')
+            )
         ),
         yaxis=dict(
-            title='Time (minutes)',
+            title=dict(
+                text='Time (minutes)',
+                font=dict(size=14, color='black', family='Arial Black')
+            ),
+            tickfont=dict(size=12, color='black', family='Arial'),
             showgrid=True,
             gridcolor='lightgray'
         ),
         plot_bgcolor='white',
         showlegend=False,
-        height=600
+        # Fixed dimensions
+        width=600,
+        height=600,
+        autosize=False,  # Prevents automatic resizing
+        margin=dict(l=80, r=60, t=80, b=80),  # Balanced margins for 600x600
+        dragmode=False  # Prevents dragging/resizing
     )
     
     return fig
@@ -5100,6 +5222,10 @@ def create_first_response_scatter_month(df, last_month):
     # Add sequential numbers
     df_month['seq_num'] = range(1, len(df_month) + 1)
     
+    df_month['first_response_time'] = df['first_response_time'].fillna(0)
+    df_month['first_response_goal'] = df['first_response_goal'].fillna(0)
+    df_month['first_response_minutes'] = df['first_response_minutes'].fillna(0)
+    
     # Determine colors based on SLA
     colors = []
     for _, row in df_month.iterrows():
@@ -5123,33 +5249,51 @@ def create_first_response_scatter_month(df, last_month):
     # Create figure
     fig = go.Figure()
     
-    # Add scatter plot
+    # Add scatter plot with bigger dots and text
     fig.add_trace(go.Scatter(
         x=df_month['seq_num'],
         y=df_month['first_response_minutes'],
         mode='markers+text',
-        marker=dict(color=colors, size=8),
+        marker=dict(
+            color=colors, 
+            size=14,  # Much bigger dots (increased from 8)
+            line=dict(width=1, color='black')  # Add border for better visibility
+        ),
         text=text_labels,
         textposition='top center',
-        textfont=dict(size=11),
+        textfont=dict(
+            size=16,  # Much bigger text (increased from 11)
+            color='black',
+            family='Arial Black'
+        ),
         showlegend=False
     ))
     
-    # Update layout
+    # Update layout with fixed dimensions
     fig.update_layout(
         xaxis=dict(
             showticklabels=False,
             showgrid=False,
             zeroline=False,
-            title=''
+            title='',
+            tickfont=dict(size=12, color='black', family='Arial')
         ),
         yaxis=dict(
-            title='Time (minutes)',
+            title=dict(
+                text='Time (minutes)',
+                font=dict(size=14, color='black', family='Arial Black')
+            ),
+            tickfont=dict(size=12, color='black', family='Arial'),
             showgrid=True,
             gridcolor='lightgray'
         ),
         plot_bgcolor='white',
-        height=600
+        # Fixed dimensions
+        width=600,
+        height=600,
+        autosize=False,  # Prevents automatic resizing
+        margin=dict(l=80, r=60, t=80, b=60),  # Proper margins for 600x600
+        dragmode=False  # Prevents dragging/resizing
     )
     
     return fig
@@ -5266,24 +5410,38 @@ def create_resolution_time_column_chart(df, start_date, end_date):
         y=plot_df['Average_Hours'],
         text=plot_df['Label'],
         textposition='outside',
-        textfont=dict(size=14, color='black', family='Arial Black'),
+        textfont=dict(size=16, color='black', family='Arial Black'),  # Larger text
         marker_color='darkblue',
-        name='Average Resolution Time'
+        name='Average Resolution Time',
+        width=0.4  # Much thinner bars
     ))
     
-    # Update layout
+    # Update layout with fixed dimensions
     fig.update_layout(
         xaxis=dict(
-            tickfont=dict(size=14, color='black', family='Arial Black')
+            tickfont=dict(size=14, color='black', family='Arial Black'),
+            title=dict(
+                text='Months',
+                font=dict(size=14, color='black', family='Arial Black')
+            )
         ),
         yaxis=dict(
-            title='Time (hours)',
+            title=dict(
+                text='Time (hours)',
+                font=dict(size=14, color='black', family='Arial Black')
+            ),
+            tickfont=dict(size=12, color='black', family='Arial'),
             showgrid=True,
             gridcolor='lightgray'
         ),
         plot_bgcolor='white',
         showlegend=False,
-        height=600
+        # Fixed dimensions
+        width=600,
+        height=600,
+        autosize=False,  # Prevents automatic resizing
+        margin=dict(l=80, r=60, t=80, b=80),  # Balanced margins for 600x600
+        dragmode=False  # Prevents dragging/resizing
     )
     
     return fig
@@ -5379,6 +5537,10 @@ def create_resolution_time_scatter_month(df, last_month):
     # Add sequential numbers
     df_month['seq_num'] = range(1, len(df_month) + 1)
     
+    df_month['first_resolution_time'] = df['first_resolution_time'].fillna(0)
+    df_month['first_resolution_goal'] = df['first_resolution_goal'].fillna(0)
+    df_month['resolution_hours'] = df['resolution_hours'].fillna(0)
+    
     # Determine colors based on SLA
     colors = []
     for _, row in df_month.iterrows():
@@ -5402,33 +5564,51 @@ def create_resolution_time_scatter_month(df, last_month):
     # Create figure
     fig = go.Figure()
     
-    # Add scatter plot
+    # Add scatter plot with bigger dots and text
     fig.add_trace(go.Scatter(
         x=df_month['seq_num'],
         y=df_month['resolution_hours'],
         mode='markers+text',
-        marker=dict(color=colors, size=8),
+        marker=dict(
+            color=colors, 
+            size=14,  # Much bigger dots (increased from 8)
+            line=dict(width=1, color='black')  # Add border for better visibility
+        ),
         text=text_labels,
         textposition='top center',
-        textfont=dict(size=11),
+        textfont=dict(
+            size=16,  # Much bigger text (increased from 11)
+            color='black',
+            family='Arial Black'
+        ),
         showlegend=False
     ))
     
-    # Update layout
+    # Update layout with fixed dimensions
     fig.update_layout(
         xaxis=dict(
             showticklabels=False,
             showgrid=False,
             zeroline=False,
-            title=''
+            title='',
+            tickfont=dict(size=12, color='black', family='Arial')
         ),
         yaxis=dict(
-            title='Time (Hours)',
+            title=dict(
+                text='Time (Hours)',
+                font=dict(size=14, color='black', family='Arial Black')
+            ),
+            tickfont=dict(size=12, color='black', family='Arial'),
             showgrid=True,
             gridcolor='lightgray'
         ),
         plot_bgcolor='white',
-        height=600
+        # Fixed dimensions
+        width=600,
+        height=600,
+        autosize=False,  # Prevents automatic resizing
+        margin=dict(l=80, r=60, t=80, b=60),  # Proper margins for 600x600
+        dragmode=False  # Prevents dragging/resizing
     )
     
     return fig
@@ -5480,7 +5660,7 @@ def display_response_resolution():
         # Task 2: Column Chart
         if results['first_response_column']:
             st.markdown("#### First Response time")
-            st.plotly_chart(results['first_response_column'], use_container_width=True)
+            st.plotly_chart(results['first_response_column'], use_container_width=False, width=600, height=600)
         
         # Task 3: Scatter Chart All Months
         #if results['first_response_scatter_all']:
@@ -5519,7 +5699,8 @@ def display_response_resolution():
         
         # Task 6: Column Chart
         if results['resolution_time_column']:
-            st.plotly_chart(results['resolution_time_column'], use_container_width=True)
+            st.markdown("#### First Resolution time")
+            st.plotly_chart(results['resolution_time_column'], use_container_width=False, height=600, width=600)
         
         # Task 7: Scatter Chart All Months
         #if results['resolution_time_scatter_all']:
