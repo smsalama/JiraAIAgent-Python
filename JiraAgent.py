@@ -3228,7 +3228,7 @@ def check_delayed_deliveries(df, end_date):
 #! Actual Sanity Check & Operational Dashboard Methods 
 def display_sanity_check_tab():
     """Display the Sanity Check tab"""
-    st.header("✔️ Jira Data Quality Checks")
+    st.header("✔️ Data Quality Checks")
     
     if 'issues_df' not in st.session_state.jira_data:
         st.warning("Please fetch Jira data first to run sanity checks.")
@@ -3632,7 +3632,7 @@ def analyze_dtedc_deliveries(df, start_date, end_date):
         return {"error": f"Analysis failed: {str(e)}"}
 
 def display_dtedc_analysis():
-    st.header("📊 DTEDC Operational Delivery Analysis")
+    st.header("📊 Operational Delivery Analysis")
 
     if 'issues_df' not in st.session_state.jira_data:
         st.warning("Please fetch Jira data first to run sanity checks.")
@@ -4095,7 +4095,7 @@ def extract_sprint_info(sprint_list, field):
 
 def display_prodOps_analysis():
     """Display The Dev Star ProdOps Delivery Analysis."""
-    st.header("📊 The Dev Star ProdOps Delivery Analysis")
+    st.header("📊 ProdOps Delivery Analysis")
 
     if 'issues_df' not in st.session_state.jira_data:
         st.warning("Please fetch Jira data first to run ProdOps Analysis.")
