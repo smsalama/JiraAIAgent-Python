@@ -22,6 +22,9 @@ from reportlab.lib import colors
 import plotly.io as pio
 import numpy as np
 import ast
+from docx import Document
+import openai
+import re
 
 
 # Suppress SSL warnings
@@ -29,12 +32,6 @@ warnings.filterwarnings('ignore', message='urllib3 v2 only supports OpenSSL')
 
 # Handle additional imports for PDF with fallback
 try:
-    from reportlab.lib.pagesizes import letter, A4
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import inch
-    from reportlab.lib import colors
-    import plotly.io as pio
     PDF_AVAILABLE = True
 except ImportError:
     PDF_AVAILABLE = False
@@ -42,7 +39,7 @@ except ImportError:
 
 # Handle docx import with fallback
 try:
-    from docx import Document
+    
     DOCX_AVAILABLE = True
 except ImportError:
     DOCX_AVAILABLE = False
@@ -50,7 +47,7 @@ except ImportError:
 
 # Handle OpenAI import with fallback
 try:
-    import openai
+    
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
@@ -1657,7 +1654,7 @@ def process_ai_chat_question(question: str, chart_preference: str = "Auto"):
         # Check for similar issue queries
         if "similar to" in question.lower() or "issues like" in question.lower():
             # Extract issue key from question
-            import re
+
             issue_key_match = re.search(r'[A-Z]+-\d+', question)
             if issue_key_match:
                 issue_key = issue_key_match.group()
@@ -1878,7 +1875,6 @@ def extract_status_filters(question):
     # Direct status mentions
     if any(word in question for word in ['status =', 'status:', 'where status']):
         # Extract quoted status
-        import re
         status_match = re.search(r'status\s*[:=]\s*["\']([^"\']+)["\']', question)
         if status_match:
             filters['status'] = status_match.group(1)
@@ -1906,7 +1902,6 @@ def extract_assignee_filters(question):
     
     # Look for assignee mentions
     if 'assigned to' in question or 'assignee' in question:
-        import re
         # Extract names in quotes
         name_match = re.search(r'(?:assigned to|assignee)\s*[:=]?\s*["\']([^"\']+)["\']', question)
         if name_match:
@@ -1968,7 +1963,6 @@ def extract_project_filters(question):
     filters = {}
     
     if 'project' in question:
-        import re
         project_match = re.search(r'project\s*[:=]?\s*["\']([^"\']+)["\']', question)
         if project_match:
             filters['project'] = project_match.group(1)
