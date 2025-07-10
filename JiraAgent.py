@@ -1631,7 +1631,7 @@ def display_project_dashboard(df, project_name):
             display_columns.append('issuetype')
         
         available_columns = [col for col in display_columns if col in df.columns]
-        st.dataframe(df[available_columns], use_container_width=True)
+        st.dataframe(df[available_columns], use_container_width=True, hide_index= True)
         
     except Exception as e:
         st.error(f"Error displaying dashboard: {str(e)}")
@@ -3276,105 +3276,89 @@ def display_sanity_check_tab():
             st.metric("Completed Stories", "N/A")
 
     st.markdown("---")
-    # Run checks
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.subheader("1️⃣ Resolved Without Due Date Check")
-        with st.spinner("Checking resolved dates..."):
-            success, result = check_missing_due_date(df, end_date)
-            if success:
-                st.success(result)
+    st.subheader("1️⃣ Resolved Without Due Date Check")
+    with st.spinner("Checking resolved dates..."):
+        success, result = check_missing_due_date(df, end_date)
+        if success:
+            st.success(result)
+        else:
+            st.error("❌ Issues found with missing due dates")
+            if isinstance(result, pd.DataFrame):
+                st.dataframe(result, use_container_width=True, hide_index=True)
             else:
-                st.error("❌ Issues found with missing due dates")
-                if isinstance(result, pd.DataFrame):
-                    st.dataframe(result, use_container_width=True)
-                else:
-                    st.write(result)
+                st.write(result)
     
-    with col2:
-        st.subheader("2️⃣ Missing Closed Date Check")
-        with st.spinner("Checking for missing closed dates..."):
-            success, result = check_missing_closed_date(df, end_date)
-            if success:
-                st.success(result)
+    st.subheader("2️⃣ Missing Closed Date Check")
+    with st.spinner("Checking for missing closed dates..."):
+        success, result = check_missing_closed_date(df, end_date)
+        if success:
+            st.success(result)
+        else:
+            st.error("❌ Issues found with missing closed dates")
+            if isinstance(result, pd.DataFrame):
+                st.dataframe(result, use_container_width=True, hide_index= True)
             else:
-                st.error("❌ Issues found with missing closed dates")
-                if isinstance(result, pd.DataFrame):
-                    st.dataframe(result, use_container_width=True)
-                else:
-                    st.write(result)
+                st.write(result)
     
-    with col3:
-        st.subheader("3️⃣ Future Closed Date Check")
-        with st.spinner("Checking for future closed dates..."):
-            success, result = check_future_closed_date(df, end_date)
-            if success:
-                st.success(result)
+    st.subheader("3️⃣ Future Closed Date Check")
+    with st.spinner("Checking for future closed dates..."):
+        success, result = check_future_closed_date(df, end_date)
+        if success:
+            st.success(result)
+        else:
+            st.error("❌ Issues found with future closed dates")
+            if isinstance(result, pd.DataFrame):
+                st.dataframe(result, use_container_width=True, hide_index= True)
             else:
-                st.error("❌ Issues found with future closed dates")
-                if isinstance(result, pd.DataFrame):
-                    st.dataframe(result, use_container_width=True)
-                else:
-                    st.write(result)
-                    
-    st.markdown("---")
-    col4, col5, col6 = st.columns(3)
+                st.write(result)
+                
+    st.subheader("4️⃣ Open Deliveries Check")
+    with st.spinner("Checking Open Deliveries..."):
+        success, result = check_open_deliveries(df)
+        if success:
+            st.success(result)
+        else:
+            st.error("❌ Open Deliveries Found")
+            if isinstance(result, pd.DataFrame):
+                st.dataframe(result, use_container_width=True, hide_index= True)
+            else:
+                st.write(result)
+                
+    st.subheader("5️⃣ In Progress Deliveries Check")
+    with st.spinner("Checking for In Progress Deliveries..."):
+        success, result = check_inprogress_deliveries(df)
+        if success:
+            st.success(result)
+        else:
+            st.error("❌ In Progress Deliveries Found")
+            if isinstance(result, pd.DataFrame):
+                st.dataframe(result, use_container_width=True, hide_index=True)
+            else:
+                st.write(result)
+                
+    st.subheader("6️⃣ Cancelled Deliveries Check")
+    with st.spinner("Checking for Cancelled Deliveries..."):
+        success, result = check_cancelled_deliveries(df)
+        if success:
+            st.success(result)
+        else:
+            st.error("❌ Cancelled Deliveries Found")
+            if isinstance(result, pd.DataFrame):
+                st.dataframe(result, use_container_width=True, hide_index= True)
+            else:
+                st.write(result)            
     
-    with col4:
-        st.subheader("4️⃣ Open Deliveries Check")
-        with st.spinner("Checking Open Deliveries..."):
-            success, result = check_open_deliveries(df)
-            if success:
-                st.success(result)
+    st.subheader("7️⃣ Delayed Deliveries Check")
+    with st.spinner("Checking Delayed Deliveries..."):
+        success, result = check_delayed_deliveries(df, end_date)
+        if success:
+            st.success(result)
+        else:
+            st.error("❌ Delayed Deliveries Found")
+            if isinstance(result, pd.DataFrame):
+                st.dataframe(result, use_container_width=True, hide_index=True)
             else:
-                st.error("❌ Open Deliveries Found")
-                if isinstance(result, pd.DataFrame):
-                    st.dataframe(result, use_container_width=True)
-                else:
-                    st.write(result)
-    
-    with col5:
-        st.subheader("5️⃣ In Progress Deliveries Check")
-        with st.spinner("Checking for In Progress Deliveries..."):
-            success, result = check_inprogress_deliveries(df)
-            if success:
-                st.success(result)
-            else:
-                st.error("❌ In Progress Deliveries Found")
-                if isinstance(result, pd.DataFrame):
-                    st.dataframe(result, use_container_width=True)
-                else:
-                    st.write(result)
-    
-    with col6:
-        st.subheader("6️⃣ Cancelled Deliveries Check")
-        with st.spinner("Checking for Cancelled Deliveries..."):
-            success, result = check_cancelled_deliveries(df)
-            if success:
-                st.success(result)
-            else:
-                st.error("❌ Cancelled Deliveries Found")
-                if isinstance(result, pd.DataFrame):
-                    st.dataframe(result, use_container_width=True)
-                else:
-                    st.write(result)
-                    
-    st.markdown("---")
-    col7 = st.columns(1)[0]
-    
-    with col7:
-        st.subheader("7️⃣ Delayed Deliveries Check")
-        with st.spinner("Checking Delayed Deliveries..."):
-            success, result = check_delayed_deliveries(df, end_date)
-            if success:
-                st.success(result)
-            else:
-                st.error("❌ Delayed Deliveries Found")
-                if isinstance(result, pd.DataFrame):
-                    st.dataframe(result, use_container_width=True)
-                else:
-                    st.write(result)
+                st.write(result)
     
     # Summary section
     st.markdown('---')
@@ -3382,7 +3366,7 @@ def display_sanity_check_tab():
     dte_deliveries = filter_dte_delivery_stories(df)
     display_cols = ['issuetype', 'key', 'summary','priority', 'status', 'assignee',  'due_date', 'closed_date'] 
     available_columns = [col for col in display_cols if col in dte_deliveries.columns]
-    st.dataframe(dte_deliveries[available_columns], use_container_width=True)
+    st.dataframe(dte_deliveries[available_columns], use_container_width=True, hide_index=True)
 
 def display_operations_report_tab():
     """Display the Operations Report tab"""
@@ -3463,7 +3447,7 @@ def display_operations_report_tab():
         
         col1, col2 = st.columns([2, 1])
         with col1:
-            st.dataframe(monthly_df, use_container_width=True)
+            st.dataframe(monthly_df, use_container_width=True, hide_index=True)
         
         with col2:
             # Create visualization
@@ -3703,75 +3687,79 @@ def display_dtedc_analysis():
         grouped_df = filtered_df.groupby('Group')['Total Deliveries'].sum().reset_index()
         grouped_df.rename(columns={'Group': 'Parent'}, inplace=True)
 
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.header('Delivery Breakdown by Parent')
-            st.dataframe(parent_df, use_container_width=True)
-        with col2:
-            st.header("Operations Delivery Breakdown")
-            #fig = px.pie(grouped_df, values='Total Count', names='Parent')
+        st.subheader('Delivery Breakdown by Parent')
+        parent_df['Parent'] = parent_df['Parent'].replace('CDD', 'DataIQ')
+        st.dataframe(parent_df, use_container_width=True, hide_index=True)
+    
+        
+        st.subheader("Operations Delivery Breakdown")
+                    #fig = px.pie(grouped_df, values='Total Count', names='Parent')
             # Create bar chart
             
-            fig = px.bar(
-                grouped_df,
-                x='Parent',
-                y='Total Deliveries',
-                text='Total Deliveries',
-                color_discrete_sequence=['#0033A0']  # IQVIA blue
-            )
+        fig = px.bar(
+        grouped_df,
+        x='Parent',
+        y='Total Deliveries',
+        text='Total Deliveries',
+        color_discrete_sequence=['#0033A0']  # IQVIA blue
+        )
 
-            # Update layout with fixed dimensions and larger, clearer text
-            fig.update_layout(
-                # Fixed dimensions
-                width=600,
-                height=600,
-                autosize=False,  # Prevents automatic resizing
-                
-                # X-axis styling
-                xaxis=dict(
-                    tickangle=-45,
-                    tickfont=dict(size=14, color='black', family='Arial Black'),
-                    title=dict(
-                        text='Parent',
-                        font=dict(size=16, color='black', family='Arial Black')
-                    )
-                ),
-                
-                # Y-axis styling
-                yaxis=dict(
-                    tickfont=dict(size=14, color='black', family='Arial Black'),
-                    title=dict(
-                        text='Total Deliveries',
-                        font=dict(size=16, color='black', family='Arial Black')
-                    ),
-                    showgrid=True,
-                    gridcolor='lightgray'
-                ),
-                
-                # Layout properties
-                plot_bgcolor='white',
-                margin=dict(l=80, r=60, t=80, b=120),  # Extra bottom margin for rotated labels
-                dragmode=False  # Prevents dragging/resizing
-            )
+        # Calculate max value for proper Y-axis range
+        max_value = grouped_df['Total Deliveries'].max()
+
+        # Update layout with fixed dimensions and larger, clearer text
+        fig.update_layout(
+            # Fixed dimensions
+            width=600,
+            height=600,
+            autosize=False,  # Prevents automatic resizing
             
-            # Update bar text properties: make bold and increase font size
-            fig.update_traces(
-                textposition='outside',
-                textfont=dict(
-                    size=18,  # Larger font size for bar labels
-                    family="Arial Black, sans-serif",  # Bold font family
-                    color='black'
+            # X-axis styling
+            xaxis=dict(
+                tickangle=-45,
+                tickfont=dict(size=14, color='black', family='Arial Black'),
+                title=dict(
+                    text='Parent',
+                    font=dict(size=16, color='black', family='Arial Black')
                 )
-            )
+            ),
             
-            st.plotly_chart(fig)
+            # Y-axis styling with proper range for text labels
+            yaxis=dict(
+                tickfont=dict(size=14, color='black', family='Arial Black'),
+                title=dict(
+                    text='Total Deliveries',
+                    font=dict(size=16, color='black', family='Arial Black')
+                ),
+                showgrid=True,
+                gridcolor='lightgray',
+                range=[0, max_value * 1.3]  # Add 30% padding above highest bar for text labels
+            ),
+            
+            # Layout properties
+            plot_bgcolor='white',
+            margin=dict(l=80, r=60, t=100, b=120),  # Increased top margin from 80 to 100
+            dragmode=False  # Prevents dragging/resizing
+        )
+
+        # Update bar text properties: make bold and increase font size
+        fig.update_traces(
+            textposition='outside',
+            textfont=dict(
+                size=18,  # Larger font size for bar labels
+                family="Arial Black, sans-serif",  # Bold font family
+                color='black'
+            )
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+        
             
     # Define the data
     data = {
-        "Acronym": ["ARA", "AIML", "CDD", "LPD", "EMR", "Alert Engine"],
+        "Acronym": ["ARA", "AIML", "DataIQ", "LPD", "EMR", "Alert Engine"],
         "Definition": [
-            "Onboarding, either from CDD or a data owner. The data is checked, prepared, and the ETL process is run, followed by automated tests to ensure completion. After integrating and performing QA in DEV, DEMO, and LIVE environments, a 'Go Live' notification is sent to stakeholders once everything is verified.",
+            "Onboarding, either from DataIQ or a data owner. The data is checked, prepared, and the ETL process is run, followed by automated tests to ensure completion. After integrating and performing QA in DEV, DEMO, and LIVE environments, a 'Go Live' notification is sent to stakeholders once everything is verified.",
             "Client delivery in AIML platform apps like PJ, ST, expert ecosystem, consumer profile for multiple regions like US and X-US (UK, BE, GE, IT, CA etc) and also takes care of Pfizer monthly reports and regular weekly claims refreshes.",
             "Loading of multiple data assets to Central Data Distribution Platform for ARA and OMOP Team.",
             "Involves validating the integrity and accuracy of data files loaded via the ETL Informatica into Oracle databases ensuring it meets QC guidelines and maintain data delivery frequency. Longitudinal Patient Data (LPD) is also a source of data for CDD (DataIQ) that serves OMOP or ARA (E360).",
@@ -3785,7 +3773,7 @@ def display_dtedc_analysis():
 
     # Streamlit app
     st.header('Key Definitions of Activities/Delivery')
-    st.dataframe(df, use_container_width=True)
+    st.dataframe(df, use_container_width=True, hide_index=True)
     
     # Metrics description table
     metrics_df = pd.DataFrame({
@@ -3799,7 +3787,7 @@ def display_dtedc_analysis():
     })
 
     with st.expander("View Aggregated Metrics"):
-        st.dataframe(metrics_df, use_container_width=True)
+        st.dataframe(metrics_df, use_container_width=True, hide_index=True)
         
 #ProdOps Section   
 def filter_dev_star_stories(df):
@@ -4256,7 +4244,7 @@ def display_prodOps_analysis():
         
         display_df['Sprint'] = display_df['Sprint'].apply(extract_latest_sprint_with_dates)
 
-        st.dataframe(display_df, use_container_width=True)
+        st.dataframe(display_df, use_container_width=True,hide_index=True)
         
         st. markdown('----')
         
@@ -4545,7 +4533,7 @@ def create_resolved_items_chart(df, start_date, end_date, colors):
     return fig
 
 def create_incidents_per_project_chart(df, start_date, end_date, colors):
-    """Task 2: Create incidents per project horizontal bar chart"""
+    """Task 2: Create incidents per project bar chart with tight grouping"""
     
     # Filter incidents only (exclude post-incidents)
     df_incidents = df[
@@ -4555,7 +4543,6 @@ def create_incidents_per_project_chart(df, start_date, end_date, colors):
     
     # Get months
     months = pd.date_range(start=start_date, end=end_date, freq='ME').strftime('%B').tolist()
-    last_month = months[-1]
     
     # March hardcoded values
     march_data = {
@@ -4569,125 +4556,139 @@ def create_incidents_per_project_chart(df, start_date, end_date, colors):
         'US HCP': 0
     }
     
-    # Prepare data
-    plot_data = []
-    country_last_month_count = {}
+    # Collect all data and identify projects with incidents
+    all_data = {}
+    project_totals = {}
     
     for month in months:
+        all_data[month] = {}
         if month == 'March':
-            # Use hardcoded data
             for country, count in march_data.items():
-                if count > 0:  # Only non-zero
-                    plot_data.append({
-                        'Month': month,
-                        'Country': country,
-                        'Count': count
-                    })
-                    if month == last_month:
-                        country_last_month_count[country] = count
+                all_data[month][country] = count
+                project_totals[country] = project_totals.get(country, 0) + count
         else:
-            # Calculate from data
             month_data = df_incidents[df_incidents['resolution_month'] == month]
             if 'country' in month_data.columns:
                 country_counts = month_data['country'].value_counts()
-                
                 for country, count in country_counts.items():
-                    if count > 0:
-                        plot_data.append({
-                            'Month': month,
-                            'Country': country,
-                            'Count': count
-                        })
-                        if month == last_month:
-                            country_last_month_count[country] = count
+                    all_data[month][country] = count
+                    project_totals[country] = project_totals.get(country, 0) + count
     
-    # Sort countries by last month count
-    sorted_countries = sorted(country_last_month_count.keys(), 
-                            key=lambda x: country_last_month_count.get(x, 0), 
-                            reverse=True)
+    # Filter to only projects with incidents
+    active_projects = [proj for proj, total in project_totals.items() if total > 0]
     
-    # Create DataFrame
-    plot_df = pd.DataFrame(plot_data)
+    # Sort projects by total incidents (descending)
+    active_projects.sort(key=lambda x: project_totals[x], reverse=True)
     
     # Create figure
     fig = go.Figure()
     
-    # Color mapping
+    # Color mapping - ensure we have colors for all months by cycling
     month_colors = [colors['blue'], colors['light_blue'], colors['green'], colors['grey']]
-    
-    # Calculate dynamic bar width based on number of countries and months
-    num_countries = len(sorted_countries)
-    num_months = len(months)
-    
-    # Adjust bar width for proper grouping - thinner bars with better spacing
-    dynamic_width = max(0.15, 0.6 / max(1, num_months))  # Divide available space by number of months
-    
-    # Add bars for each month
+    month_color_map = {}
     for i, month in enumerate(months):
-        month_data = plot_df[plot_df['Month'] == month]
-        
-        # Order by sorted countries - FIX: Convert Series to dict properly
-        ordered_data = []
-        for country in sorted_countries:
-            country_data = month_data[month_data['Country'] == country]
-            if not country_data.empty:
-                # Convert Series to dictionary properly
-                row = country_data.iloc[0]
-                ordered_data.append({
-                    'Month': row['Month'],
-                    'Country': row['Country'],
-                    'Count': row['Count']
+        month_color_map[month] = month_colors[i % len(month_colors)]  # Cycle through colors
+    
+    # Calculate custom positions for tight grouping
+    bar_width = 0.15
+    group_spacing = 1.0  # Space between project groups
+    
+    # Build data structure for positioning with error handling
+    project_bar_data = {}
+    for project in active_projects:
+        project_bar_data[project] = []
+        for month in months:
+            count = all_data[month].get(project, 0)
+            if count > 0:  # Only include months with actual data
+                # Ensure month exists in color map
+                if month not in month_color_map:
+                    print(f"Warning: No color found for month {month}")
+                    continue
+                    
+                project_bar_data[project].append({
+                    'month': month,
+                    'count': count,
+                    'color': month_color_map[month]
                 })
-            else:
-                # Add zero entry for missing data to maintain grouping
-                ordered_data.append({
-                    'Month': month,
-                    'Country': country,
-                    'Count': 0
-                })
+    
+    # Calculate positions and create bars
+    current_x = 0
+    x_tick_positions = []
+    x_tick_labels = []
+    
+    for project in active_projects:
+        bars_data = project_bar_data[project]
+        if not bars_data:
+            continue
+            
+        # Calculate center position for this project
+        num_bars = len(bars_data)
+        group_width = num_bars * bar_width
+        group_start = current_x - group_width / 2
         
-        if ordered_data:
-            ordered_df = pd.DataFrame(ordered_data)
+        # Add each bar for this project
+        for i, bar_data in enumerate(bars_data):
+            x_pos = group_start + (i + 0.5) * bar_width
             
             fig.add_trace(go.Bar(
-                name=month,
-                y=ordered_df['Country'],
-                x=ordered_df['Count'],
-                orientation='v',
-                marker_color=month_colors[i % len(month_colors)],
-                text=[str(count) if count > 0 else '' for count in ordered_df['Count']],  # Hide zero labels
+                x=[x_pos],
+                y=[bar_data['count']],
+                width=bar_width,
+                marker_color=bar_data['color'],
+                text=[str(bar_data['count'])],
                 textposition='outside',
-                textfont=dict(size=14, color='black', family='Arial Black'),  # Appropriate text size for grouped bars
-                width=dynamic_width  # Dynamic width based on data
+                textfont=dict(size=16, color='black', family='Arial Black'),
+                showlegend=False,  # We'll add custom legend
+                hoverinfo='none'
             ))
+        
+        # Store position for x-axis labels
+        x_tick_positions.append(current_x)
+        x_tick_labels.append(project)
+        current_x += group_spacing
     
-    # Calculate dynamic height based on number of countries
-    chart_height = min(600, max(400, num_countries * 60 + 150))  # Dynamic height with min/max
+    # Add custom legend
+    for month, color in month_color_map.items():
+        fig.add_trace(go.Bar(
+            x=[None], y=[None],
+            marker_color=color,
+            name=month,
+            showlegend=True
+        ))
     
-    # Update layout with proper grouping
+    # Calculate max value for y-axis
+    max_month_value = 0
+    for month_data in all_data.values():
+        for count in month_data.values():
+            if count > max_month_value:
+                max_month_value = count
+    
+    if max_month_value == 0:
+        max_month_value = 15
+    
+    # Update layout
     fig.update_layout(
-        yaxis=dict(
-            tickfont=dict(size=12, color='black', family='Arial Black'),  # Larger font for country names
-            categoryorder='array',
-            categoryarray=sorted_countries[::-1],  # Reverse for proper display
+        xaxis=dict(
+            tickvals=x_tick_positions,
+            ticktext=x_tick_labels,
+            tickfont=dict(size=11, color='black', family='Arial Black'),
             title=dict(
                 text='Projects',
                 font=dict(size=14, color='black', family='Arial Black')
-            )
+            ),
+            tickangle=-45,
+            range=[-0.5, current_x - 0.5]
         ),
-        xaxis=dict(
+        yaxis=dict(
             showgrid=True,
             gridcolor='lightgray',
-            tickfont=dict(size=12, color='black', family='Arial'),  # Larger font for numbers
+            tickfont=dict(size=12, color='black', family='Arial'),
             title=dict(
                 text='Incident Count',
                 font=dict(size=14, color='black', family='Arial Black')
             ),
-            range=[0, max(plot_df['Count']) * 1.3] if len(plot_df) > 0 else [0, 1]  # More padding for text labels
+            range=[0, max_month_value * 1.3]
         ),
-        barmode='group',  # Critical for proper grouping
-        bargap=0.4,  # Space between country groups
-        bargroupgap=0.1,  # Space between month bars within each country group
         plot_bgcolor='white',
         showlegend=True,
         legend=dict(
@@ -4698,18 +4699,17 @@ def create_incidents_per_project_chart(df, start_date, end_date, colors):
             x=0.5,
             font=dict(size=11, color='black', family='Arial')
         ),
-        # Dynamic dimensions that adapt to data but respect maximums
-        width=600,  # Fixed width as requested
-        height=chart_height,  # Dynamic height up to 600
-        autosize=False,  # Prevents automatic resizing
-        margin=dict(l=130, r=40, t=80, b=60),  # Optimized margins for grouped bars
-        dragmode=False  # Prevents dragging/resizing
+        width=600,
+        height=550,
+        autosize=False,
+        margin=dict(l=80, r=40, t=90, b=120),
+        dragmode=False
     )
     
     return fig
 
 def create_incidents_by_priority_chart(df, start_date, end_date, colors):
-    """Task 3: Create incidents by priority horizontal bar chart"""
+    """Task 3: Create incidents by priority vertical bar chart"""
     
     # Filter incidents only
     df_incidents = df[
@@ -4742,18 +4742,16 @@ def create_incidents_by_priority_chart(df, start_date, end_date, colors):
     # Create figure
     fig = go.Figure()
     
-    # Calculate dynamic bar width based on number of months and priorities
+    # Calculate dynamic bar width for proper grouping
     num_months = len(months)
-    num_priorities = len(priority_order)
+    bar_width = max(0.15, 0.6 / max(1, num_months))  # Thinner bars for proper grouping
     
-    # Ensure bars don't overlap - adjust width based on data density
-    max_width = 0.8 / num_priorities  # Total space divided by number of priorities
-    bar_width = min(0.15, max_width)  # Cap at 0.15 but allow smaller if needed
+    # Collect all data and max value
+    all_values = []
     
-    # Create one trace per priority with ALL months data
+    # Create one trace per priority - this ensures proper grouping
     for priority in priority_order:
-        x_values = []
-        y_values = []        
+        y_values = []  # counts for this priority across all months
         text_values = []
         
         # Collect data for this priority across all months
@@ -4769,69 +4767,66 @@ def create_incidents_by_priority_chart(df, start_date, end_date, colors):
                 else:
                     count = 0
             
-            x_values.append(count)
-            y_values.append(month)
+            y_values.append(count)
             text_values.append(str(count) if count > 0 else '')
+            all_values.append(count)
         
         # Add one trace for this priority across all months
         fig.add_trace(go.Bar(
             name=priority,
-            y=x_values,
-            x=y_values,  # All months for each priority
-            orientation='v',
+            x=months,  # All months on x-axis
+            y=y_values,  # Values for this priority
             marker_color=priority_colors[priority],
             text=text_values,
             textposition='outside',
-            textfont=dict(size=16, color='black', family='Arial Black'),  # Larger text
-            width=bar_width  # Dynamic width to prevent overlap
+            textfont=dict(size=16, color='black', family='Arial Black'),
+            width=bar_width,  # Consistent width for all bars
+            offsetgroup=priority  # This ensures proper grouping
         ))
     
-    # Calculate dynamic height based on number of months
-    chart_height = min(600, max(300, num_months * 80 + 120))
-                
+    # Calculate maximum value for y-axis range
+    max_value = max(all_values) if all_values else 16
+    
+    # Calculate dynamic height
+    chart_height = min(600, max(400, max_value * 20 + 200))
+    
     fig.update_layout(
         xaxis=dict(
-            tickfont=dict(size=13, color='black', family='Arial Black'),
-            categoryorder='array',
-            categoryarray=months[::-1],  # Reverse for proper display
+            tickfont=dict(size=14, color='black', family='Arial Black'),
             title=dict(
                 text='Months',
-                font=dict(size=14, color='black', family='Arial Black')
+                font=dict(size=16, color='black', family='Arial Black')
             )
         ),
         yaxis=dict(
             showgrid=True,
             gridcolor='lightgray',
-            tickfont=dict(size=13, color='black', family='Arial'),
+            tickfont=dict(size=14, color='black', family='Arial'),
             title=dict(
                 text='Incident Count',
-                font=dict(size=14, color='black', family='Arial Black')
+                font=dict(size=16, color='black', family='Arial Black')
             ),
-            # Add some padding to ensure text labels are visible
-            range=[0, max([max(x_values) for priority in priority_order 
-                          for x_values in [[march_data.get(priority, 0) if month == 'March' 
-                                          else 0 for month in months]]]) * 1.15]
+            range=[0, max_value * 1.25]  # Space for text labels
         ),
-        barmode='group',  # Groups bars side by side
+        barmode='group',  # Critical: groups bars side by side
         plot_bgcolor='white',
         paper_bgcolor='white',
-        # Respect max dimensions while being responsive
-        width=600,  # Max width as requested
-        height=chart_height,  # Dynamic height up to 600
-        autosize=False,  # Prevents automatic resizing
-        bargap=0.5,  # Increased space between month groups to prevent overlap
-        bargroupgap=0.05,  # Minimal space between priority bars within each month
+        width=600,
+        height=chart_height,
+        autosize=False,
+        bargap=0.4,  # Space between month groups
+        bargroupgap=0.1,  # Space between priority bars within each month
         legend=dict(
-            orientation='h',  # Vertical legend
-            yanchor='middle',
-            y=0.5,
-            xanchor='left',
-            x=1.02,  # Position legend to the right
-            font=dict(size=11, color='black', family='Arial')
+            orientation='h',
+            yanchor='bottom',
+            y=1.02,
+            xanchor='center',
+            x=0.5,
+            font=dict(size=12, color='black', family='Arial')
         ),
-        margin=dict(l=80, r=120, t=40, b=60),  # Optimized margins
+        margin=dict(l=80, r=40, t=100, b=80),
         showlegend=True,
-        dragmode=False  # Prevents dragging/resizing
+        dragmode=False
     )
     
     return fig
@@ -4883,16 +4878,16 @@ def display_support_overview():
     
     # Display Task 1
     st.subheader("📈 Resolved Incidents, Requests and Changes")
-    st.plotly_chart(results['resolved_items_chart'], use_container_width=False, width=600, height=600)
+    st.plotly_chart(results['resolved_items_chart'], use_container_width=True)
     
     
     # Display Task 2
     st.subheader("🌍 Incidents per Project")
-    st.plotly_chart(results['incidents_per_project_chart'], use_container_width=False)
+    st.plotly_chart(results['incidents_per_project_chart'], use_container_width=True)
     
     # Display Task 3
     st.subheader("🎯 Incidents by Priority")
-    st.plotly_chart(results['incidents_by_priority_chart'], use_container_width=False)
+    st.plotly_chart(results['incidents_by_priority_chart'], use_container_width=True)
     
     # Display Task 4
     st.subheader("🚨 Critical Incidents - Last Month")
@@ -5908,10 +5903,26 @@ def create_task2_cause_code_column_chart(df, first_month_name, last_month_name):
         top_cause_codes[1]: '#5DADE2'   # Light blue for second cause code (Data Issue Fix)
     }
     
-    # Create x-axis labels and positions
+    # Create x-axis labels and positions with shortened names to prevent overlap
     x_labels = []
     x_positions = []
     current_position = 0
+    
+    # Function to shorten country names for display
+    def shorten_country_name(name):
+        if len(name) <= 8:
+            return name
+        # Create abbreviations for long names
+        abbreviations = {
+            'EMR Germany': 'EMR DE',
+            'EMR Italy': 'EMR IT',
+            'LPD Belgium': 'LPD BE',
+            'LPD France': 'LPD FR',
+            'US AE': 'US AE',
+            'US HCP': 'US HCP',
+            'DataIQ': 'DataIQ'
+        }
+        return abbreviations.get(name, name[:8])  # Fallback to first 8 chars
     
     # Process each cause code separately
     for i, cause_code in enumerate(top_cause_codes):
@@ -5934,12 +5945,21 @@ def create_task2_cause_code_column_chart(df, first_month_name, last_month_name):
             showlegend=True
         ))
         
-        # Update labels and positions
-        x_labels.extend(country_counts.index.tolist())
+        # Update labels and positions with shortened names
+        shortened_names = [shorten_country_name(name) for name in country_counts.index.tolist()]
+        x_labels.extend(shortened_names)
         x_positions.extend(cause_positions)
         
         # Add gap between cause codes
         current_position += len(country_counts) + 1
+    
+    # Calculate max value for y-axis range
+    max_value = 0
+    for cause_code in top_cause_codes:
+        cause_data = df_top_causes[df_top_causes[cause_code_field] == cause_code]
+        country_counts = cause_data['country'].value_counts()
+        if len(country_counts) > 0:
+            max_value = max(max_value, country_counts.max())
     
     # Create custom x-axis with cause code sections
     fig.update_layout(
@@ -5947,30 +5967,31 @@ def create_task2_cause_code_column_chart(df, first_month_name, last_month_name):
             tickmode='array',
             tickvals=x_positions,
             ticktext=x_labels,
-            tickfont=dict(size=12, family="Arial Black"),
-            tickangle=0,
+            tickfont=dict(size=12, family="Arial Black"),  # Back to normal font size with shorter labels
+            tickangle=-90,  # Keep at -90 degrees as requested
             showgrid=False
         ),
         yaxis=dict(
             showgrid=True,
             gridcolor='lightgray',
-            tickfont=dict(size=12)
+            tickfont=dict(size=12),
+            range=[0, max_value * 1.3]  # Add 30% padding for text labels above bars
         ),
-        height=600,
+        height=600,  # Back to normal height
         barmode='group',
         plot_bgcolor='white',
         legend=dict(
             orientation='h',
             yanchor='bottom',
-            y=-0.3,
+            y=1.02,  # Move legend to top
             xanchor='center',
             x=0.5,
             font=dict(size=12)
         ),
-        margin=dict(l=50, r=50, t=80, b=150)
+        margin=dict(l=50, r=50, t=120, b=180)  # Reasonable bottom margin for shortened labels
     )
     
-    # Add cause code section labels at the bottom
+    # Add cause code section labels at the bottom - positioned lower to avoid overlap
     section_starts = []
     section_centers = []
     current_pos = 0
@@ -5986,10 +6007,10 @@ def create_task2_cause_code_column_chart(df, first_month_name, last_month_name):
         section_centers.append(section_center)
         section_starts.append(section_start)
         
-        # Add section label
+        # Add section label - positioned appropriately below shortened country labels
         fig.add_annotation(
             x=section_center,
-            y=-0.15,
+            y=-0.3,  # Adjusted back up since country names are now shorter
             text=f"<b>{cause_code}</b>",
             showarrow=False,
             font=dict(size=14, family="Arial Black", color='gray'),
@@ -6041,7 +6062,8 @@ def display_cause_code_analysis():
         unique_countries = filtered_df['country'].nunique() if 'country' in filtered_df.columns else 0
         st.metric("Projects", unique_countries)
     with col4:
-        date_range = f"{start_date.strftime('%B')} to {end_date.strftime('%B')}"
+        date_range = f"{start_date.strftime('%b')} - {end_date.strftime('%b')}"
+
         st.metric("Analysis Period", date_range)
     
     st.markdown("---")
@@ -6100,13 +6122,13 @@ def display_cause_code_analysis():
                 'Country': country_counts.index,
                 'Incident Count': country_counts.values
             })
-            st.dataframe(country_df, use_container_width=True)
+            st.dataframe(country_df, use_container_width=True, hide_index= True)
     
     # Show filtered data
     with st.expander("View Filtered HDEPS Incidents"):
         display_cols = ['key', 'country', 'status', 'priority', 'resolutiondate', 'ticket_resolution']
         available_cols = [col for col in display_cols if col in filtered_df.columns]
-        st.dataframe(filtered_df[available_cols], use_container_width=True)       
+        st.dataframe(filtered_df[available_cols], use_container_width=True, hide_index= True)       
 
 if __name__ == "__main__":
     try:
