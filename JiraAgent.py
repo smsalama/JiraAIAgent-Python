@@ -4615,6 +4615,13 @@ def create_incidents_per_project_chart(df, start_date, end_date, colors):
     # Color mapping
     month_colors = [colors['blue'], colors['light_blue'], colors['green'], colors['grey']]
     
+    # Calculate dynamic bar width based on number of countries and months
+    num_countries = len(sorted_countries)
+    num_months = len(months)
+    
+    # Adjust bar width for proper grouping - thinner bars with better spacing
+    dynamic_width = max(0.15, 0.6 / max(1, num_months))  # Divide available space by number of months
+    
     # Add bars for each month
     for i, month in enumerate(months):
         month_data = plot_df[plot_df['Month'] == month]
@@ -4646,38 +4653,41 @@ def create_incidents_per_project_chart(df, start_date, end_date, colors):
                 name=month,
                 y=ordered_df['Country'],
                 x=ordered_df['Count'],
-                orientation='h',
+                orientation='v',
                 marker_color=month_colors[i % len(month_colors)],
                 text=[str(count) if count > 0 else '' for count in ordered_df['Count']],  # Hide zero labels
                 textposition='outside',
-                textfont=dict(size=14, color='black', family='Arial Black'),  # Slightly smaller text
-                width=0.15  # Much thinner bars to prevent overlap
+                textfont=dict(size=14, color='black', family='Arial Black'),  # Appropriate text size for grouped bars
+                width=dynamic_width  # Dynamic width based on data
             ))
+    
+    # Calculate dynamic height based on number of countries
+    chart_height = min(600, max(400, num_countries * 60 + 150))  # Dynamic height with min/max
     
     # Update layout with proper grouping
     fig.update_layout(
         yaxis=dict(
-            tickfont=dict(size=11, color='black', family='Arial Black'),  # Smaller font
+            tickfont=dict(size=12, color='black', family='Arial Black'),  # Larger font for country names
             categoryorder='array',
             categoryarray=sorted_countries[::-1],  # Reverse for proper display
             title=dict(
                 text='Projects',
-                font=dict(size=12, color='black', family='Arial Black')
+                font=dict(size=14, color='black', family='Arial Black')
             )
         ),
         xaxis=dict(
             showgrid=True,
             gridcolor='lightgray',
-            tickfont=dict(size=11, color='black', family='Arial'),
+            tickfont=dict(size=12, color='black', family='Arial'),  # Larger font for numbers
             title=dict(
                 text='Incident Count',
-                font=dict(size=12, color='black', family='Arial Black')
+                font=dict(size=14, color='black', family='Arial Black')
             ),
-            range=[0, max(plot_df['Count']) * 1.3] if len(plot_df) > 0 else [0, 1]  # Handle empty DataFrame
+            range=[0, max(plot_df['Count']) * 1.3] if len(plot_df) > 0 else [0, 1]  # More padding for text labels
         ),
         barmode='group',  # Critical for proper grouping
-        bargap=0.3,  # Space between country groups
-        bargroupgap=0.05,  # Minimal space within month groups
+        bargap=0.4,  # Space between country groups
+        bargroupgap=0.1,  # Space between month bars within each country group
         plot_bgcolor='white',
         showlegend=True,
         legend=dict(
@@ -4686,13 +4696,13 @@ def create_incidents_per_project_chart(df, start_date, end_date, colors):
             y=1.02,
             xanchor='center',
             x=0.5,
-            font=dict(size=10, color='black', family='Arial')
+            font=dict(size=11, color='black', family='Arial')
         ),
-        # Fixed dimensions
-        width=600,
-        height=600,
+        # Dynamic dimensions that adapt to data but respect maximums
+        width=600,  # Fixed width as requested
+        height=chart_height,  # Dynamic height up to 600
         autosize=False,  # Prevents automatic resizing
-        margin=dict(l=100, r=70, t=60, b=60),  # Adjusted margins
+        margin=dict(l=130, r=40, t=80, b=60),  # Optimized margins for grouped bars
         dragmode=False  # Prevents dragging/resizing
     )
     
@@ -4732,6 +4742,14 @@ def create_incidents_by_priority_chart(df, start_date, end_date, colors):
     # Create figure
     fig = go.Figure()
     
+    # Calculate dynamic bar width based on number of months and priorities
+    num_months = len(months)
+    num_priorities = len(priority_order)
+    
+    # Ensure bars don't overlap - adjust width based on data density
+    max_width = 0.8 / num_priorities  # Total space divided by number of priorities
+    bar_width = min(0.15, max_width)  # Cap at 0.15 but allow smaller if needed
+    
     # Create one trace per priority with ALL months data
     for priority in priority_order:
         x_values = []
@@ -4760,17 +4778,20 @@ def create_incidents_by_priority_chart(df, start_date, end_date, colors):
             name=priority,
             x=x_values,
             y=y_values,  # All months for each priority
-            orientation='h',
+            orientation='v',
             marker_color=priority_colors[priority],
             text=text_values,
             textposition='outside',
-            textfont=dict(size=14, color='black', family='Arial Black'),  # Adjusted text size
-            width=0.2  # Much thinner bars to prevent overlap
+            textfont=dict(size=16, color='black', family='Arial Black'),  # Larger text
+            width=bar_width  # Dynamic width to prevent overlap
         ))
+    
+    # Calculate dynamic height based on number of months
+    chart_height = min(600, max(300, num_months * 80 + 120))
                 
     fig.update_layout(
         yaxis=dict(
-            tickfont=dict(size=12, color='black', family='Arial Black'),
+            tickfont=dict(size=13, color='black', family='Arial Black'),
             categoryorder='array',
             categoryarray=months[::-1],  # Reverse for proper display
             title=dict(
@@ -4781,30 +4802,34 @@ def create_incidents_by_priority_chart(df, start_date, end_date, colors):
         xaxis=dict(
             showgrid=True,
             gridcolor='lightgray',
-            tickfont=dict(size=12, color='black', family='Arial'),
+            tickfont=dict(size=13, color='black', family='Arial'),
             title=dict(
                 text='Incident Count',
                 font=dict(size=14, color='black', family='Arial Black')
-            )
+            ),
+            # Add some padding to ensure text labels are visible
+            range=[0, max([max(x_values) for priority in priority_order 
+                          for x_values in [[march_data.get(priority, 0) if month == 'March' 
+                                          else 0 for month in months]]]) * 1.15]
         ),
         barmode='group',  # Groups bars side by side
         plot_bgcolor='white',
         paper_bgcolor='white',
-        # Fixed dimensions
-        width=600,
-        height=600,
+        # Respect max dimensions while being responsive
+        width=600,  # Max width as requested
+        height=chart_height,  # Dynamic height up to 600
         autosize=False,  # Prevents automatic resizing
-        bargap=0.4,  # More space between month groups
-        bargroupgap=0.05,  # Small space between bars within each group
+        bargap=0.5,  # Increased space between month groups to prevent overlap
+        bargroupgap=0.05,  # Minimal space between priority bars within each month
         legend=dict(
-            orientation='v',  # Vertical legend
+            orientation='h',  # Vertical legend
             yanchor='middle',
             y=0.5,
             xanchor='left',
             x=1.02,  # Position legend to the right
             font=dict(size=11, color='black', family='Arial')
         ),
-        margin=dict(l=60, r=120, t=40, b=60),  # More right margin for legend
+        margin=dict(l=80, r=120, t=40, b=60),  # Optimized margins
         showlegend=True,
         dragmode=False  # Prevents dragging/resizing
     )
@@ -5402,6 +5427,20 @@ def create_resolution_time_column_chart(df, start_date, end_date):
     # Create DataFrame
     plot_df = pd.DataFrame(monthly_data)
     
+    # Calculate dynamic properties based on data
+    num_months = len(plot_df)
+    max_hours = plot_df['Average_Hours'].max() if len(plot_df) > 0 else 20
+    
+    # Dynamic bar width - more months = thinner bars, but keep minimum width
+    bar_width = max(0.3, min(0.8, 0.8 / max(1, num_months * 0.2)))
+    
+    # Dynamic Y-axis range - ensure text labels are fully visible
+    y_range_max = max_hours * 1.25  # 25% padding for text labels
+    
+    # Dynamic text size based on available space and number of months
+    base_text_size = 24
+    text_size = max(18, min(base_text_size, base_text_size - (num_months - 4) * 1))
+    
     # Create figure
     fig = go.Figure()
     
@@ -5410,13 +5449,17 @@ def create_resolution_time_column_chart(df, start_date, end_date):
         y=plot_df['Average_Hours'],
         text=plot_df['Label'],
         textposition='outside',
-        textfont=dict(size=16, color='black', family='Arial Black'),  # Larger text
+        textfont=dict(size=text_size, color='black', family='Arial Black'),  # Dynamic larger text
         marker_color='darkblue',
         name='Average Resolution Time',
-        width=0.4  # Much thinner bars
+        width=bar_width  # Dynamic bar width
     ))
     
-    # Update layout with fixed dimensions
+    # Dynamic margin adjustments
+    top_margin = max(100, 80 + (text_size - 18) * 2)  # More space for larger text
+    bottom_margin = max(80, 60 + num_months * 2)  # More space for month labels if many months
+    
+    # Update layout with dynamic properties
     fig.update_layout(
         xaxis=dict(
             tickfont=dict(size=14, color='black', family='Arial Black'),
@@ -5430,17 +5473,23 @@ def create_resolution_time_column_chart(df, start_date, end_date):
                 text='Time (hours)',
                 font=dict(size=14, color='black', family='Arial Black')
             ),
-            tickfont=dict(size=12, color='black', family='Arial'),
+            tickfont=dict(size=14, color='black', family='Arial'),
             showgrid=True,
-            gridcolor='lightgray'
+            gridcolor='lightgray',
+            range=[0, y_range_max]  # Dynamic range to accommodate text labels
         ),
         plot_bgcolor='white',
         showlegend=False,
-        # Fixed dimensions
+        # Fixed dimensions as requested
         width=600,
         height=600,
         autosize=False,  # Prevents automatic resizing
-        margin=dict(l=80, r=60, t=80, b=80),  # Balanced margins for 600x600
+        margin=dict(
+            l=80, 
+            r=60, 
+            t=top_margin,  # Dynamic top margin for text labels
+            b=bottom_margin  # Dynamic bottom margin for month labels
+        ),
         dragmode=False  # Prevents dragging/resizing
     )
     
@@ -5669,11 +5718,11 @@ def display_response_resolution():
         # Task 4: Scatter Chart Last Month
         if results['first_response_scatter_month']:
             st.markdown(f'#### First Response Time (mins) - [{month_name}]')
-            st.plotly_chart(results['first_response_scatter_month'], use_container_width=True)
+            st.plotly_chart(results['first_response_scatter_month'], use_container_width=False)
     
     with tab2:
         st.subheader("📊 Resolution Time Analysis")
-        
+
         # Task 5: Table
         if results['resolution_time_table']:
             st.markdown(f"### {results['resolution_time_table']['table_title']}")
@@ -5710,7 +5759,7 @@ def display_response_resolution():
         # Task 8: Scatter Chart Last Month
         if results['resolution_time_scatter_month']:
             st.markdown(f'#### Resolution Time (hours) - {month_name}')
-            st.plotly_chart(results['resolution_time_scatter_month'], use_container_width=True)
+            st.plotly_chart(results['resolution_time_scatter_month'], use_container_width=False)
             
             
 #### Cause Code Analysis     
