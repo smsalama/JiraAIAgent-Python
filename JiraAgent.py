@@ -4776,8 +4776,8 @@ def create_incidents_by_priority_chart(df, start_date, end_date, colors):
         # Add one trace for this priority across all months
         fig.add_trace(go.Bar(
             name=priority,
-            x=x_values,
-            y=y_values,  # All months for each priority
+            y=x_values,
+            x=y_values,  # All months for each priority
             orientation='v',
             marker_color=priority_colors[priority],
             text=text_values,
@@ -4790,7 +4790,7 @@ def create_incidents_by_priority_chart(df, start_date, end_date, colors):
     chart_height = min(600, max(300, num_months * 80 + 120))
                 
     fig.update_layout(
-        yaxis=dict(
+        xaxis=dict(
             tickfont=dict(size=13, color='black', family='Arial Black'),
             categoryorder='array',
             categoryarray=months[::-1],  # Reverse for proper display
@@ -4799,7 +4799,7 @@ def create_incidents_by_priority_chart(df, start_date, end_date, colors):
                 font=dict(size=14, color='black', family='Arial Black')
             )
         ),
-        xaxis=dict(
+        yaxis=dict(
             showgrid=True,
             gridcolor='lightgray',
             tickfont=dict(size=13, color='black', family='Arial'),
