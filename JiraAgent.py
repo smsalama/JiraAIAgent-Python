@@ -25,7 +25,6 @@ import ast
 from docx import Document
 import openai
 import re
-import kaleido
 
 
 # Suppress SSL warnings
