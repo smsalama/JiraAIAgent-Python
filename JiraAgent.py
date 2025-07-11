@@ -1422,7 +1422,8 @@ def main():
                 st.warning("Please configure Jira settings and select projects first.")
                 
     # Main content area - Updated tabs
-    tab1,tab2,tab3,tab4,tab5,tab6 = st.tabs(["✔️ Sanity Check", "📈 Operations Report", "🛠️ Support Report", "🔍Cause Code Analysis", "🧑‍💻 ProdOps Report","💬 AI Chat"])
+    tab1,tab2,tab3,tab4,tab5 = st.tabs(["✔️ Sanity Check", "📈 Operations Report", "🛠️ Support Report", "🔍Cause Code Analysis", "🧑‍💻 ProdOps Report"])
+    #"💬 AI Chat"
     #Sanity Check Tab
     with tab1:
         display_sanity_check_tab()     
@@ -1441,104 +1442,83 @@ def main():
     with tab5:
         display_prodOps_analysis()
     #AI Chat Tab
-    with tab6:
-        st.header("AI Chat Assistant")
-        st.write("Ask questions about your Jira data and get insights with visualizations")
+    # with tab6:
+    #     st.header("AI Chat Assistant")
+    #     st.write("Ask questions about your Jira data and get insights with visualizations")
         
-        # Initialize chat history
-        if 'chat_history' not in st.session_state:
-            st.session_state.chat_history = []
+    #     # Initialize chat history
+    #     if 'chat_history' not in st.session_state:
+    #         st.session_state.chat_history = []
         
-        # Chat interface
-        if 'issues_df' in st.session_state.jira_data:
-            # Enhanced AI features section
-            col1 = st.columns(1)[0]
+    #     # Chat interface
+    #     if 'issues_df' in st.session_state.jira_data:
+    #         # Enhanced AI features section
+    #         col1 = st.columns(1)[0]
             
-            with col1:
-                st.info("🧠 **Enhanced AI Intelligence**")
-                with st.expander("View AI Capabilities"):
-                    st.markdown("""
-                    **🔍 Root Cause Analysis:**
-                    - "Perform root cause analysis on failed issues"
-                    - "Find root causes for blocked tasks"
-                    - "Analyze problems in [specific component]"
+    #         with col1:
+    #             st.info("🧠 **Enhanced AI Intelligence**")
+    #             with st.expander("View AI Capabilities"):
+    #                 st.markdown("""
+    #                 **🔍 Root Cause Analysis:**
+    #                 - "Perform root cause analysis on failed issues"
+    #                 - "Find root causes for blocked tasks"
+    #                 - "Analyze problems in [specific component]"
                     
-                    **🔗 Similar Issue Detection:**
-                    - "Find issues similar to [ISSUE-KEY]"
-                    - "Show me all issues related to authentication errors"
-                    - "Group similar bugs together"
+    #                 **🔗 Similar Issue Detection:**
+    #                 - "Find issues similar to [ISSUE-KEY]"
+    #                 - "Show me all issues related to authentication errors"
+    #                 - "Group similar bugs together"
                     
-                    **📊 Advanced Analytics:**
-                    - "Show workload trends for all projects"
-                    - "Compare team performance across projects"
-                    - "Analyze resolution patterns for bugs"
+    #                 **📊 Advanced Analytics:**
+    #                 - "Show workload trends for all projects"
+    #                 - "Compare team performance across projects"
+    #                 - "Analyze resolution patterns for bugs"
                     
-                    **🎯 Intelligent Filtering:**
-                    - "Show high priority bugs assigned to John"
-                    - "Analyze completed issues from last month"
-                    - "Compare this sprint vs last sprint"
+    #                 **🎯 Intelligent Filtering:**
+    #                 - "Show high priority bugs assigned to John"
+    #                 - "Analyze completed issues from last month"
+    #                 - "Compare this sprint vs last sprint"
                     
-                    **📈 Predictive Insights:**
-                    - "When will the backlog be completed?"
-                    - "Predict next month's workload"
-                    - "Estimate time to resolve open bugs"
-                    """)
+    #                 **📈 Predictive Insights:**
+    #                 - "When will the backlog be completed?"
+    #                 - "Predict next month's workload"
+    #                 - "Estimate time to resolve open bugs"
+    #                 """)
             
-            # Chat input section
-            col1, col2 = st.columns([3, 1])
+    #         # Chat input section
+    #         col1, col2 = st.columns([3, 1])
             
-            with col1:
-                user_question = st.text_input(
-                    "Ask about your Jira data:",
-                    placeholder="e.g., Show me a bar chart of monthly workloads for all projects"
-                )
+    #         with col1:
+    #             user_question = st.text_input(
+    #                 "Ask about your Jira data:",
+    #                 placeholder="e.g., Show me a bar chart of monthly workloads for all projects"
+    #             )
             
-            with col2:
-                chart_preference = st.selectbox(
-                    "Preferred Chart",
-                    ["Auto", "Bar Chart", "Line Chart", "Pie Chart", "Scatter Plot", "Histogram", "Sunburst", "Treemap", "Funnel", "Heatmap"],
-                    help="Select preferred chart type (AI will adapt based on data)"
-                )
+    #         with col2:
+    #             chart_preference = st.selectbox(
+    #                 "Preferred Chart",
+    #                 ["Auto", "Bar Chart", "Line Chart", "Pie Chart", "Scatter Plot", "Histogram", "Sunburst", "Treemap", "Funnel", "Heatmap"],
+    #                 help="Select preferred chart type (AI will adapt based on data)"
+    #             )
             
-            col1, col2 = st.columns([1, 4])
-            with col1:
-                if st.button("🚀 Ask AI"):
-                    if user_question:
-                        # Fixed: Pass chart_preference as part of the processing
-                        process_ai_chat_question(user_question, chart_preference)
+    #         col1, col2 = st.columns([1, 4])
+    #         with col1:
+    #             if st.button("🚀 Ask AI"):
+    #                 if user_question:
+    #                     # Fixed: Pass chart_preference as part of the processing
+    #                     process_ai_chat_question(user_question, chart_preference)
             
-            with col2:
-                if st.button("🗑️ Clear Chat"):
-                    st.session_state.chat_history = []
-                    st.rerun()
+    #         with col2:
+    #             if st.button("🗑️ Clear Chat"):
+    #                 st.session_state.chat_history = []
+    #                 st.rerun()
             
-            # Display chat history
-            if st.session_state.chat_history:
-                st.subheader("Chat History")
+    #         # Display chat history
+    #         if st.session_state.chat_history:
+    #             st.subheader("Chat History")
         
-        else:
-            st.info("Please fetch Jira data first to start chatting with the AI assistant.")
-
-def initialize_session_state():
-    """Initialize session state variables to avoid attribute errors"""
-    if 'issue_df' not in st.session_state:
-        st.session_state.issue_df = None
-
-def check_dataframe_ready():
-    """Check if dataframe is ready for PDF export"""
-    if not hasattr(st.session_state, 'issue_df'):
-        st.error("❌ Dataframe not initialized. Please load your data first.")
-        return False
-    
-    if st.session_state.issue_df is None:
-        st.warning("⚠️ No data loaded.")
-        return False
-    
-    if st.session_state.issue_df.empty:
-        st.warning("⚠️ Dataframe is empty. Please load valid data.")
-        return False
-    
-    return True
+    #     else:
+    #         st.info("Please fetch Jira data first to start chatting with the AI assistant.")
     
 def display_project_dashboard(df, project_name):
     """Display dashboard for a specific project"""
