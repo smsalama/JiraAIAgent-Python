@@ -25,6 +25,7 @@ import ast
 from docx import Document
 import openai
 import re
+import kaleido
 
 
 # Suppress SSL warnings
@@ -56,7 +57,7 @@ except ImportError:
 st.set_page_config(
     page_title="AI Jira Agent",
     page_icon="🤖",
-    layout="wide",
+    layout="centered",
     initial_sidebar_state="expanded"
 )
 
@@ -1420,7 +1421,7 @@ def main():
                         st.warning("No issues found in the specified date range")
             else:
                 st.warning("Please configure Jira settings and select projects first.")
-    
+                
     # Main content area - Updated tabs
     tab1,tab2,tab3,tab4,tab5,tab6 = st.tabs(["✔️ Sanity Check", "📈 Operations Report", "🛠️ Support Report", "🔍Cause Code Analysis", "🧑‍💻 ProdOps Report","💬 AI Chat"])
     #Sanity Check Tab
@@ -1518,6 +1519,27 @@ def main():
         
         else:
             st.info("Please fetch Jira data first to start chatting with the AI assistant.")
+
+def initialize_session_state():
+    """Initialize session state variables to avoid attribute errors"""
+    if 'issue_df' not in st.session_state:
+        st.session_state.issue_df = None
+
+def check_dataframe_ready():
+    """Check if dataframe is ready for PDF export"""
+    if not hasattr(st.session_state, 'issue_df'):
+        st.error("❌ Dataframe not initialized. Please load your data first.")
+        return False
+    
+    if st.session_state.issue_df is None:
+        st.warning("⚠️ No data loaded.")
+        return False
+    
+    if st.session_state.issue_df.empty:
+        st.warning("⚠️ Dataframe is empty. Please load valid data.")
+        return False
+    
+    return True
     
 def display_project_dashboard(df, project_name):
     """Display dashboard for a specific project"""
