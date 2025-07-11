@@ -3798,7 +3798,7 @@ def filter_dev_star_stories(df):
     
     # Filter by issue type
     if 'issuetype' in filtered_df.columns:
-        filtered_df = filtered_df[filtered_df['issuetype'].isin(['Story', 'Research'])]
+        filtered_df = filtered_df[filtered_df['issuetype'].isin(['Story', 'Research', 'Bug'])]
     return filtered_df
 
 
