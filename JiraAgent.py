@@ -3702,7 +3702,7 @@ def display_dtedc_analysis():
         x='Parent',
         y='Total Deliveries',
         text='Total Deliveries',
-        color_discrete_sequence=['#0033A0']  # IQVIA blue
+        color_discrete_sequence=['#0033A0']  
         )
 
         # Calculate max value for proper Y-axis range
@@ -4317,8 +4317,8 @@ def create_support_overview(df, start_date, end_date):
         end_date: End date for analysis
     """
     
-    # Define IQVIA color palette
-    IQVIA_COLORS = {
+    # Define color palette
+    Template_Colors = {
         'blue': '#005587',
         'light_blue': '#4A90E2',
         'bright_blue': '#00B5E2',
@@ -4338,13 +4338,13 @@ def create_support_overview(df, start_date, end_date):
     
     #working until here.
     # Task 1: Resolved Incidents, Requests & Changes
-    task1_fig = create_resolved_items_chart(df, start_date, end_date, IQVIA_COLORS)
+    task1_fig = create_resolved_items_chart(df, start_date, end_date, Template_Colors)
     
     # Task 2: Incidents per Project
-    task2_fig = create_incidents_per_project_chart(df, start_date, end_date, IQVIA_COLORS)
+    task2_fig = create_incidents_per_project_chart(df, start_date, end_date, Template_Colors)
     
     # Task 3: Incidents by Priority
-    task3_fig = create_incidents_by_priority_chart(df, start_date, end_date, IQVIA_COLORS)
+    task3_fig = create_incidents_by_priority_chart(df, start_date, end_date, Template_Colors)
     
     # Task 4: Critical Incidents Table
     critical_incidents_df = create_critical_incidents_table(df, end_date)
