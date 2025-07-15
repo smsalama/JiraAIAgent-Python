@@ -5094,48 +5094,63 @@ def create_first_response_column_chart(df, start_date, end_date):
     
     # Calculate average per month
     monthly_data = []
-    
     for month in months:
         if month == 'March':
             # Hardcoded March value: 35:47
             monthly_data.append({
                 'Month': month,
-                'Average_Minutes': 35,
-                'Average_Seconds': 47,
+                'Average_Minutes': 35.78,  # 35m 47s in decimal
                 'Label': '35m 47s'
             })
         else:
             month_df = df[df['resolution_month'] == month]
             if len(month_df) > 0 and 'first_response_seconds' in month_df.columns:
                 avg_seconds = month_df['first_response_seconds'].mean()
+                avg_minutes = avg_seconds / 60  # Convert to minutes for consistency
                 minutes = int(avg_seconds // 60)
                 seconds = int(avg_seconds % 60)
                 label = f"{minutes}m {seconds:02d}s"
                 monthly_data.append({
                     'Month': month,
-                    'Average_Minutes': minutes,
-                    'Average_Seconds': seconds,
+                    'Average_Minutes': avg_minutes,
                     'Label': label
                 })
     
     # Create DataFrame
     plot_df = pd.DataFrame(monthly_data)
     
+    # Calculate dynamic properties based on data - same logic as resolution time
+    num_months = len(plot_df)
+    max_value = plot_df['Average_Minutes'].max() if len(plot_df) > 0 else 40
+    
+    # Dynamic bar width - consistent across both methods
+    bar_width = max(0.3, min(0.8, 0.8 / max(1, num_months * 0.3)))
+    
+    # Dynamic Y-axis range - ensure text labels are fully visible
+    y_range_max = max_value * 1.3  # 30% padding for text labels
+    
+    # Dynamic text size based on available space and number of months
+    base_text_size = 20
+    text_size = max(16, min(base_text_size, base_text_size - (num_months - 2) * 1))
+    
     # Create figure
     fig = go.Figure()
-    
     fig.add_trace(go.Bar(
         x=plot_df['Month'],
-        y=plot_df['Average_Minutes'] + plot_df['Average_Seconds']/60,
+        y=plot_df['Average_Minutes'],
         text=plot_df['Label'],
         textposition='outside',
-        textfont=dict(size=16, color='black', family='Arial Black'),  # Larger text
+        textfont=dict(size=text_size, color='black', family='Arial Black'),
         marker_color='darkblue',
         name='Average Response Time',
-        width=0.4  # Much thinner bars
+        width=bar_width
     ))
     
-    # Update layout with fixed dimensions
+    # Dynamic margin adjustments - same logic as resolution time
+    top_margin = max(100, 80 + (text_size - 16) * 2)  # More space for larger text
+    bottom_margin = max(80, 60 + num_months * 2)  # More space for month labels if many months
+    
+    # Update layout with dynamic properties
     fig.update_layout(
         xaxis=dict(
             tickfont=dict(size=14, color='black', family='Arial Black'),
@@ -5151,16 +5166,22 @@ def create_first_response_column_chart(df, start_date, end_date):
             ),
             tickfont=dict(size=12, color='black', family='Arial'),
             showgrid=True,
-            gridcolor='lightgray'
+            gridcolor='lightgray',
+            range=[0, y_range_max]  # Dynamic range to accommodate text labels
         ),
         plot_bgcolor='white',
         showlegend=False,
         # Fixed dimensions
         width=600,
         height=600,
-        autosize=False,  # Prevents automatic resizing
-        margin=dict(l=80, r=60, t=80, b=80),  # Balanced margins for 600x600
-        dragmode=False  # Prevents dragging/resizing
+        autosize=False,
+        margin=dict(
+            l=80,
+            r=60,
+            t=top_margin,  # Dynamic top margin for text labels
+            b=bottom_margin  # Dynamic bottom margin for month labels
+        ),
+        dragmode=False
     )
     
     return fig
@@ -5424,13 +5445,12 @@ def create_resolution_time_column_chart(df, start_date, end_date):
     
     # Calculate average per month
     monthly_data = []
-    
     for month in months:
         if month == 'March':
             # Hardcoded March value: 8:55
             monthly_data.append({
                 'Month': month,
-                'Average_Hours': 8.92,  # 8:55 in decimal
+                'Average_Hours': 8.92, # 8:55 in decimal
                 'Label': '8hrs 55mins'
             })
         else:
@@ -5451,34 +5471,33 @@ def create_resolution_time_column_chart(df, start_date, end_date):
     
     # Calculate dynamic properties based on data
     num_months = len(plot_df)
-    max_hours = plot_df['Average_Hours'].max() if len(plot_df) > 0 else 20
+    max_value = plot_df['Average_Hours'].max() if len(plot_df) > 0 else 20
     
-    # Dynamic bar width - more months = thinner bars, but keep minimum width
-    bar_width = max(0.3, min(0.8, 0.8 / max(1, num_months * 0.2)))
+    # Dynamic bar width - consistent across both methods
+    bar_width = max(0.3, min(0.8, 0.8 / max(1, num_months * 0.3)))
     
     # Dynamic Y-axis range - ensure text labels are fully visible
-    y_range_max = max_hours * 1.25  # 25% padding for text labels
+    y_range_max = max_value * 1.3  # 30% padding for text labels
     
     # Dynamic text size based on available space and number of months
-    base_text_size = 24
-    text_size = max(18, min(base_text_size, base_text_size - (num_months - 4) * 1))
+    base_text_size = 20
+    text_size = max(16, min(base_text_size, base_text_size - (num_months - 2) * 1))
     
     # Create figure
     fig = go.Figure()
-    
     fig.add_trace(go.Bar(
         x=plot_df['Month'],
         y=plot_df['Average_Hours'],
         text=plot_df['Label'],
         textposition='outside',
-        textfont=dict(size=text_size, color='black', family='Arial Black'),  # Dynamic larger text
+        textfont=dict(size=text_size, color='black', family='Arial Black'),
         marker_color='darkblue',
         name='Average Resolution Time',
-        width=bar_width  # Dynamic bar width
+        width=bar_width
     ))
     
     # Dynamic margin adjustments
-    top_margin = max(100, 80 + (text_size - 18) * 2)  # More space for larger text
+    top_margin = max(100, 80 + (text_size - 16) * 2)  # More space for larger text
     bottom_margin = max(80, 60 + num_months * 2)  # More space for month labels if many months
     
     # Update layout with dynamic properties
@@ -5495,24 +5514,24 @@ def create_resolution_time_column_chart(df, start_date, end_date):
                 text='Time (hours)',
                 font=dict(size=14, color='black', family='Arial Black')
             ),
-            tickfont=dict(size=14, color='black', family='Arial'),
+            tickfont=dict(size=12, color='black', family='Arial'),
             showgrid=True,
             gridcolor='lightgray',
             range=[0, y_range_max]  # Dynamic range to accommodate text labels
         ),
         plot_bgcolor='white',
         showlegend=False,
-        # Fixed dimensions as requested
+        # Fixed dimensions
         width=600,
         height=600,
-        autosize=False,  # Prevents automatic resizing
+        autosize=False,
         margin=dict(
-            l=80, 
-            r=60, 
+            l=80,
+            r=60,
             t=top_margin,  # Dynamic top margin for text labels
             b=bottom_margin  # Dynamic bottom margin for month labels
         ),
-        dragmode=False  # Prevents dragging/resizing
+        dragmode=False
     )
     
     return fig
