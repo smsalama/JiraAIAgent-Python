@@ -3937,7 +3937,6 @@ def create_advanced_sprint_chart(df, config=None):
         'show_values': True,
         'show_totals': True,
         'height': 600,
-        'width': 1100,
         'date_format': 'auto',
         'sort_epics_by': 'total',
     }
@@ -4033,7 +4032,7 @@ def create_advanced_sprint_chart(df, config=None):
                     y=totals[sprint] * 1.02,
                     text=f'<b>{int(totals[sprint])}</b>',
                     showarrow=False,
-                    font=dict(size=18, color='black', weight='bold')
+                    font=dict(size=18, color='black')  # Removed invalid 'weight' property
                 )
     
     # Create x-axis labels with dates
@@ -4095,7 +4094,6 @@ def create_advanced_sprint_chart(df, config=None):
         plot_bgcolor='white',
         paper_bgcolor='white',
         height=config['height'],
-        width=config['width'],
         legend=dict(
             x=1.02,
             y=0.98,
@@ -4173,8 +4171,7 @@ def display_prodOps_analysis():
         st.metric(
             "Complete Stories", 
             f"{results['metrics']['completion_count']['percentage']}%", 
-            f"{results['metrics']['completion_count']['count']} stories",
-            delta_color="inverse"
+            f"{results['metrics']['completion_count']['count']} stories"
         )
 
     # Process sprint data
@@ -4743,9 +4740,25 @@ def create_incidents_by_priority_chart(df, start_date, end_date, colors):
     # Create figure
     fig = go.Figure()
     
-    # Calculate dynamic bar width for proper grouping
+    # Calculate gap settings based on number of months
     num_months = len(months)
-    bar_width = max(0.15, 0.6 / max(1, num_months))  # Thinner bars for proper grouping
+    
+    # Adjust gap settings based on number of months to prevent overlapping
+    if num_months == 1:
+        bargap = 0.6  # More space around single month group
+        bargroupgap = 0.1  # Tight spacing between priorities
+    elif num_months == 2:
+        bargap = 0.4  # Good spacing between month groups
+        bargroupgap = 0.15  # Moderate spacing between priorities
+    elif num_months == 3:
+        bargap = 0.5  # More space between month groups
+        bargroupgap = 0.25  # More space between priorities to prevent overlap
+    elif num_months == 4:
+        bargap = 0.6  # Even more space between month groups
+        bargroupgap = 0.3  # Maximum space between priorities
+    else:
+        bargap = 0.7  # Maximum space for 5+ months
+        bargroupgap = 0.35
     
     # Collect all data and max value
     all_values = []
@@ -4781,7 +4794,6 @@ def create_incidents_by_priority_chart(df, start_date, end_date, colors):
             text=text_values,
             textposition='outside',
             textfont=dict(size=16, color='black', family='Arial Black'),
-            width=bar_width,  # Consistent width for all bars
             offsetgroup=priority  # This ensures proper grouping
         ))
     
@@ -4815,8 +4827,8 @@ def create_incidents_by_priority_chart(df, start_date, end_date, colors):
         width=600,
         height=chart_height,
         autosize=False,
-        bargap=0.4,  # Space between month groups
-        bargroupgap=0.1,  # Space between priority bars within each month
+        bargap=bargap,  # Dynamic space between month groups
+        bargroupgap=bargroupgap,  # Dynamic space between priority bars within each month
         legend=dict(
             orientation='h',
             yanchor='bottom',
@@ -4935,8 +4947,8 @@ def create_response_resolution_analysis(df, start_date, end_date):
     # Task 2: First Response Time Column Chart - All Months
     first_response_column = create_first_response_column_chart(df_prepared, start_date, end_date)
     
-    # Task 3: First Response Time Scatter Chart - All Months
-    #first_response_scatter_all = create_first_response_scatter_all(df_prepared, start_date, end_date)
+    #Task 3: First Response Time Scatter Chart - All Months
+    first_response_scatter_all = create_first_response_scatter_all(df_prepared, start_date, end_date)
     
     # Task 4: First Response Time Scatter Chart - Last Month
     first_response_scatter_month = create_first_response_scatter_month(df_prepared, last_month)
@@ -4948,7 +4960,7 @@ def create_response_resolution_analysis(df, start_date, end_date):
     resolution_time_column = create_resolution_time_column_chart(df_prepared, start_date, end_date)
     
     # Task 7: Resolution Time Scatter Chart - All Months
-    #resolution_time_scatter_all = create_resolution_time_scatter_all(df_prepared, start_date, end_date)
+    resolution_time_scatter_all = create_resolution_time_scatter_all(df_prepared, start_date, end_date)
     
     # Task 8: Resolution Time Scatter Chart - Last Month
     resolution_time_scatter_month = create_resolution_time_scatter_month(df_prepared, last_month)
@@ -4956,11 +4968,11 @@ def create_response_resolution_analysis(df, start_date, end_date):
     return {
         'first_response_table': first_response_table,
         'first_response_column': first_response_column,
-        #'first_response_scatter_all': first_response_scatter_all,
+        'first_response_scatter_all': first_response_scatter_all,
         'first_response_scatter_month': first_response_scatter_month,
         'resolution_time_table': resolution_time_table,
         'resolution_time_column': resolution_time_column,
-        #'resolution_time_scatter_all': resolution_time_scatter_all,
+        'resolution_time_scatter_all': resolution_time_scatter_all,
         'resolution_time_scatter_month': resolution_time_scatter_month
     }
 
@@ -5019,6 +5031,8 @@ def create_first_response_table(df, last_month):
     
     # Calculate SLA metrics
     if 'first_response_time' in df.columns and 'first_response_goal' in df.columns:
+        df_month['first_response_time'] = df_month['first_response_time'].fillna(0)
+        df_month['first_response_goal'] = df_month['first_response_goal'].fillna(0)
         df_month['met_sla'] = df_month['first_response_time'] <= df_month['first_response_goal']
         total_incidents = len(df_month)
         met_sla_count = df_month['met_sla'].sum()
@@ -5160,19 +5174,35 @@ def create_first_response_scatter_all(df, start_date, end_date):
     # Add sequential numbers
     df_sorted['seq_num'] = range(1, len(df_sorted) + 1)
     
-    # Get month boundaries
+    # Get month boundaries and calculate mid-points for x-axis labels
     month_boundaries = []
-    months = []
+    tick_positions = []
+    tick_labels = []
     
-    for month in df_sorted['resolution_month'].unique():
+    # Get unique months in chronological order (preserve order from sorted dataframe)
+    seen_months = set()
+    ordered_months = []
+    for month in df_sorted['resolution_month']:
+        if month not in seen_months:
+            ordered_months.append(month)
+            seen_months.add(month)
+    
+    for month in ordered_months:
         month_df = df_sorted[df_sorted['resolution_month'] == month]
         if len(month_df) > 0:
+            start_pos = month_df['seq_num'].min()
+            end_pos = month_df['seq_num'].max()
+            mid_point = (start_pos + end_pos) / 2
+            
             month_boundaries.append({
                 'month': month,
-                'start': month_df['seq_num'].min(),
-                'end': month_df['seq_num'].max()
+                'start': start_pos,
+                'end': end_pos,
+                'mid_point': mid_point
             })
-            months.append(month)
+            
+            tick_positions.append(mid_point)
+            tick_labels.append(month)
     
     # Create figure
     fig = go.Figure()
@@ -5195,26 +5225,17 @@ def create_first_response_scatter_all(df, start_date, end_date):
             line_color="gray"
         )
     
-    # Add month labels
-    for boundary in month_boundaries:
-        mid_point = (boundary['start'] + boundary['end']) / 2
-        fig.add_annotation(
-            x=mid_point,
-            y=-5,
-            text=boundary['month'],
-            showarrow=False,
-            font=dict(size=11),
-            yref='paper',
-            yshift=-20
-        )
-    
-    # Update layout
+    # Update layout with custom x-axis labels
     fig.update_layout(
         xaxis=dict(
-            showticklabels=False,
+            tickmode='array',
+            tickvals=tick_positions,
+            ticktext=tick_labels,
+            showticklabels=True,
             showgrid=False,
             zeroline=False,
-            title=''
+            title='',
+            tickfont=dict(size=11)
         ),
         yaxis=dict(
             title='Time (minutes)',
@@ -5227,6 +5248,7 @@ def create_first_response_scatter_all(df, start_date, end_date):
     )
     
     return fig
+
 
 def create_first_response_scatter_month(df, last_month):
     """Task 4: Create first response time scatter chart for last month"""
@@ -5337,7 +5359,11 @@ def create_resolution_time_table(df, last_month):
     
     # Calculate SLA metrics
     if 'first_resolution_time' in df.columns and 'first_resolution_goal' in df.columns:
+        df_month['first_resolution_time'] = df_month['first_resolution_time'].fillna(0)
+        df_month['first_resolution_goal'] = df_month['first_resolution_goal'].fillna(0)
+        
         df_month['met_sla'] = df_month['first_resolution_time'] <= df_month['first_resolution_goal']
+        
         total_incidents = len(df_month)
         met_sla_count = df_month['met_sla'].sum()
         sla_percentage = (met_sla_count / total_incidents * 100) if total_incidents > 0 else 0
@@ -5500,17 +5526,35 @@ def create_resolution_time_scatter_all(df, start_date, end_date):
     # Add sequential numbers
     df_sorted['seq_num'] = range(1, len(df_sorted) + 1)
     
-    # Get month boundaries
+    # Get month boundaries and calculate mid-points for x-axis labels
     month_boundaries = []
+    tick_positions = []
+    tick_labels = []
     
-    for month in df_sorted['resolution_month'].unique():
+    # Get unique months in chronological order (preserve order from sorted dataframe)
+    seen_months = set()
+    ordered_months = []
+    for month in df_sorted['resolution_month']:
+        if month not in seen_months:
+            ordered_months.append(month)
+            seen_months.add(month)
+    
+    for month in ordered_months:
         month_df = df_sorted[df_sorted['resolution_month'] == month]
         if len(month_df) > 0:
+            start_pos = month_df['seq_num'].min()
+            end_pos = month_df['seq_num'].max()
+            mid_point = (start_pos + end_pos) / 2
+            
             month_boundaries.append({
                 'month': month,
-                'start': month_df['seq_num'].min(),
-                'end': month_df['seq_num'].max()
+                'start': start_pos,
+                'end': end_pos,
+                'mid_point': mid_point
             })
+            
+            tick_positions.append(mid_point)
+            tick_labels.append(month)
     
     # Create figure
     fig = go.Figure()
@@ -5533,21 +5577,18 @@ def create_resolution_time_scatter_all(df, start_date, end_date):
             line_color="gray"
         )
     
-    # Add month labels
-    for boundary in month_boundaries:
-        mid_point = (boundary['start'] + boundary['end']) / 2
-        fig.add_annotation(
-            x=mid_point,
-            y=-0.5,
-            text=boundary['month'],
-            showarrow=False,
-            font=dict(size=11),
-            yref='paper',
-            yshift=-20
-        )
-    
-    # Update layout
+    # Update layout with custom x-axis labels
     fig.update_layout(
+        xaxis=dict(
+            tickmode='array',
+            tickvals=tick_positions,
+            ticktext=tick_labels,
+            showticklabels=True,
+            showgrid=False,
+            zeroline=False,
+            title='',
+            tickfont=dict(size=11)
+        ),
         yaxis=dict(
             title='Time (Hours)',
             showgrid=True,
@@ -5708,8 +5749,9 @@ def display_response_resolution():
             st.plotly_chart(results['first_response_column'], use_container_width=False, width=600, height=600)
         
         # Task 3: Scatter Chart All Months
-        #if results['first_response_scatter_all']:
-        #    st.plotly_chart(results['first_response_scatter_all'], use_container_width=True)
+        if results['first_response_scatter_all']:
+            st.markdown(f'#### Response Time - YTD')
+            st.plotly_chart(results['first_response_scatter_all'], use_container_width=True)
         
         # Task 4: Scatter Chart Last Month
         if results['first_response_scatter_month']:
@@ -5748,9 +5790,9 @@ def display_response_resolution():
             st.plotly_chart(results['resolution_time_column'], use_container_width=False, height=600, width=600)
         
         # Task 7: Scatter Chart All Months
-        #if results['resolution_time_scatter_all']:
-        #    st.markdown(f'#### Resolution Time - YTD')
-        #    st.plotly_chart(results['resolution_time_scatter_all'], use_container_width=True)
+        if results['resolution_time_scatter_all']:
+            st.markdown(f'#### Resolution Time - YTD')
+            st.plotly_chart(results['resolution_time_scatter_all'], use_container_width=True)
         
         # Task 8: Scatter Chart Last Month
         if results['resolution_time_scatter_month']:
