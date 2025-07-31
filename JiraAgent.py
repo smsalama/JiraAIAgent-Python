@@ -3040,7 +3040,42 @@ def filter_dte_delivery_stories(df):
         # Use regex pattern to match epics
         pattern = '|'.join([re.escape(epic) for epic in excluded_epics])
         filtered_df = filtered_df[~filtered_df['parent_epic_summary'].str.contains(pattern, case=False, na=False)]
-    
+        
+    def rename_parent_based_on_summary(row):
+            if pd.isna(row['summary']):
+                return row.get('parent_epic_summary', '')
+            summary = str(row['summary'])
+            if 'DE_DE' in summary:
+                return 'DE_DE_SPLIT'
+            elif 'IT_IT' in summary:
+                return 'EMR IT'
+            elif 'UK_UK' in summary:
+                return 'EMR UK IMRD'
+            else:
+                return row.get('parent_epic_summary', '')
+
+    filtered_df['renamed_parent'] = filtered_df.apply(rename_parent_based_on_summary, axis=1)
+
+    de_de_stories = filtered_df[filtered_df['renamed_parent'] == 'DE_DE_SPLIT']
+    expanded_rows = []
+    for _, row in de_de_stories.iterrows():
+        for parent in ['EMR DE MDI', 'EMR DE MIDAS', 'EMR DE PDI', 'EMR DE SBPDS Projection Factors']:
+            new_row = row.copy()
+            new_row['renamed_parent'] = parent
+            new_row['is_split'] = True
+            expanded_rows.append(new_row)
+
+    filtered_df = filtered_df[filtered_df['renamed_parent'] != 'DE_DE_SPLIT']
+    if expanded_rows:
+        expanded_df = pd.DataFrame(expanded_rows)
+        filtered_df = pd.concat([filtered_df, expanded_df], ignore_index=True)
+        
+    #Get rid of any upstream cases 
+    if 'summary' in filtered_df.columns:
+        excludedSummaries = 'Upstream'
+        # Use regex pattern to match epics
+        filtered_df = filtered_df[~filtered_df['summary'].str.contains(excludedSummaries, case=False, na=False)]
+        
     return filtered_df
 
 def check_missing_due_date(df, end_date):
@@ -3219,6 +3254,58 @@ def check_cancelled_deliveries(df):
             return False, "No Cancelled Deliveries found in data"                   
     except Exception as e:
         return False, f"Error in Cancelled Deliveries check: {str(e)}"
+    
+def check_delayed_deliveries_in_month(df, end_date):
+    """Check for Delayed Deliveries"""
+    try:
+        # Apply DTE filters
+        delayedDeliveries = filter_dte_delivery_stories(df)
+        
+        # Ensure date columns are in datetime format and timezone-naive
+        delayedDeliveries['due_date'] = pd.to_datetime(
+            delayedDeliveries['due_date'], errors='coerce'
+        ).dt.tz_localize(None)
+
+        delayedDeliveries['closed_date'] = pd.to_datetime(
+            delayedDeliveries['closed_date'], errors='coerce'
+        ).dt.tz_localize(None)
+
+        # Ensure end_date is a timezone-naive Timestamp
+        end_date = pd.to_datetime(end_date).tz_localize(None)
+        start_of_month = pd.to_datetime(end_date.replace(day=1))
+        
+        delayedDeliveries = delayedDeliveries[(delayedDeliveries['due_date'] >= start_of_month) & (delayedDeliveries['due_date'] <= end_date)]
+
+        if 'status' in delayedDeliveries.columns:
+            delayedDeliveries = delayedDeliveries[
+                (delayedDeliveries['status'].isin(['Closed', 'Done', 'Completed'])) &
+                (
+                    (delayedDeliveries['due_date'] < delayedDeliveries['closed_date']) |
+                    (delayedDeliveries['closed_date'].isna()) |
+                    (delayedDeliveries['closed_date'] == '')
+                )
+            ]
+            
+            # Calculate DelayDays
+            delay_closed = (delayedDeliveries['closed_date'] - delayedDeliveries['due_date']).dt.days
+            delay_noClosed = pd.Series(end_date - delayedDeliveries['due_date']).dt.days
+
+            delayedDeliveries['DelayDays'] = np.where(
+                delayedDeliveries['closed_date'].notna(),
+                delay_closed,
+                delay_noClosed)
+            
+           
+            if len(delayedDeliveries) > 0:
+                display_cols = ['key', 'summary', 'parent_epic_summary']
+                available_cols = [col for col in display_cols if col in delayedDeliveries.columns]
+                return False, delayedDeliveries[available_cols + ['DelayDays']]
+            else:
+                return True, "✅ No Delayed Deliveries are Found."
+        else:
+            return False, "No Delayed Deliveries found in data"          
+    except Exception as e:
+        return False, f"Error in Delayed Deliveries check: {str(e)}"
 
 def check_delayed_deliveries(df, end_date):
     """Check for Delayed Deliveries"""
@@ -3247,7 +3334,7 @@ def check_delayed_deliveries(df, end_date):
                     (delayedDeliveries['closed_date'] == '')
                 )
             ]
-            # FIX    the issue with any delivery the includes the work upstream
+            
             # Calculate DelayDays
             delay_closed = (delayedDeliveries['closed_date'] - delayedDeliveries['due_date']).dt.days
             delay_noClosed = pd.Series(end_date - delayedDeliveries['due_date']).dt.days
@@ -3515,50 +3602,17 @@ def analyze_dtedc_deliveries(df, start_date, end_date):
         end_date = pd.to_datetime(end_date)
 
         filtered_df = filter_dte_delivery_stories(df)
+        #filtered_df.to_csv("/Users/ssalama/Desktop/PythonCode/JIRA AI Agent/OrgDF2.csv")
 
         if 'summary' in filtered_df.columns:
             # Normalize summaries to lowercase for consistent matching
             filtered_df['summary_lower'] = filtered_df['summary'].str.lower()
 
-            # Include rows that:
-            # - contain "downstream"
-            # - OR do not contain "upstream" at all
-            filtered_df = filtered_df[
-                filtered_df['summary_lower'].str.contains("downstream", na=False) |
-                ~filtered_df['summary_lower'].str.contains("upstream", na=False)
-            ]
-
             # Drop the helper column if no longer needed
             filtered_df.drop(columns=['summary_lower'], inplace=True)
-
-        def rename_parent_based_on_summary(row):
-            if pd.isna(row['summary']):
-                return row.get('parent_epic_summary', '')
-            summary = str(row['summary'])
-            if 'DE_DE' in summary:
-                return 'DE_DE_SPLIT'
-            elif 'IT_IT' in summary:
-                return 'EMR IT'
-            elif 'UK_UK' in summary:
-                return 'EMR UK IMRD'
-            else:
-                return row.get('parent_epic_summary', '')
-
-        filtered_df['renamed_parent'] = filtered_df.apply(rename_parent_based_on_summary, axis=1)
-
-        de_de_stories = filtered_df[filtered_df['renamed_parent'] == 'DE_DE_SPLIT']
-        expanded_rows = []
-        for _, row in de_de_stories.iterrows():
-            for parent in ['EMR DE MDI', 'EMR DE MIDAS', 'EMR DE PDI', 'EMR DE SBPDS Projection Factors']:
-                new_row = row.copy()
-                new_row['renamed_parent'] = parent
-                new_row['is_split'] = True
-                expanded_rows.append(new_row)
-
-        filtered_df = filtered_df[filtered_df['renamed_parent'] != 'DE_DE_SPLIT']
-        if expanded_rows:
-            expanded_df = pd.DataFrame(expanded_rows)
-            filtered_df = pd.concat([filtered_df, expanded_df], ignore_index=True)
+            
+        if 'status' in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df['status'] == 'Done']
 
         if 'due_date' in filtered_df.columns:
             thismonthstartdate = end_date.replace(day=1).strftime('%Y-%m-%d')
@@ -3574,6 +3628,8 @@ def analyze_dtedc_deliveries(df, start_date, end_date):
 
         if 'closed_date' in calculation_df.columns:
             calculation_df['closed_date'] = pd.to_datetime(calculation_df['closed_date'], errors='coerce')
+            
+        #calculation_df.to_csv("/Users/ssalama/Desktop/PythonCode/JIRA AI Agent/CalcDF2.csv")
 
         total_in_scope = len(calculation_df)
         cancelled_stories = calculation_df[last_month_stories['status'] == 'Cancelled'] if 'status' in last_month_stories.columns else last_month_stories
@@ -3590,7 +3646,7 @@ def analyze_dtedc_deliveries(df, start_date, end_date):
                 (calculation_df['due_date'] >= calculation_df['closed_date'])
             ]
             on_time_count = len(on_time_stories)
-            on_time_rate = (on_time_count / total_in_scope * 100) if total_in_scope > 0 else 0
+            on_time_rate = (on_time_count / (total_in_scope - cancelled_count) * 100) if total_in_scope > 0 else 0
 
             delayed_stories = calculation_df[
                 (calculation_df['status'] == 'Done') &
@@ -3598,7 +3654,7 @@ def analyze_dtedc_deliveries(df, start_date, end_date):
                 (calculation_df['due_date'] < calculation_df['closed_date'])
             ]
             delayed_count = len(delayed_stories)
-            delay_rate = (delayed_count / total_in_scope * 100) if total_in_scope > 0 else 0
+            delay_rate = (delayed_count / (total_in_scope - cancelled_count) * 100) if total_in_scope > 0 else 0
         else:
             on_time_count = on_time_rate = delayed_count = delay_rate = 0
 
@@ -3686,19 +3742,46 @@ def display_dtedc_analysis():
 
     st.subheader(f"Analysis Period: {results['analysis_period']}")
 
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("Total Deliveries", results['total_in_scope'])
     with col2:
         st.metric("Completion Rate", f"{results['metrics']['completion_rate']['percentage']}%", f"{results['metrics']['completion_rate']['count']} deliveries")
+    #with col3:
+    #    st.metric("Cancelled Rate", f"{results['metrics']['cancelled_rate']['percentage']}%", f"{results['metrics']['cancelled_rate']['count']} deliveries")
     with col3:
-        st.metric("Cancelled Rate", f"{results['metrics']['cancelled_rate']['percentage']}%", f"{results['metrics']['cancelled_rate']['count']} deliveries")
-    with col4:
         st.metric("On Time Rate", f"{results['metrics']['on_time_rate']['percentage']}%", f"{results['metrics']['on_time_rate']['count']} deliveries")
-    with col5:
+    with col4:
         st.metric("Delay Rate", f"{results['metrics']['delay_rate']['percentage']}%", f"{results['metrics']['delay_rate']['count']} deliveries")
 
     st.subheader("📈 Delivery Breakdown")
+    
+            # Metrics description table
+    metrics_df = pd.DataFrame({
+            "Metric": ["Completion Rate", "Cancelled Rate", "On Time Rate", "Delay Rate"],
+            "Description": [
+                results['metrics']['completion_rate']['description'],
+                results['metrics']['cancelled_rate']['description'],
+                results['metrics']['on_time_rate']['description'],
+                results['metrics']['delay_rate']['description']
+            ]
+        })
+
+    with st.expander("View Aggregated Metrics"):
+        st.dataframe(metrics_df, use_container_width=True, hide_index=True)
+    
+    st.subheader("⏳ Delayed Deliveries")
+    with st.spinner("Checking Delayed Deliveries..."):
+        success, result = check_delayed_deliveries_in_month(df, end_date)
+        if success:
+            st.success(result)
+        else:
+            st.error("❌ Delayed Deliveries Found")
+            if isinstance(result, pd.DataFrame):
+                st.dataframe(result, use_container_width=True, hide_index=True)
+            else:
+                st.write(result)
+    
     if results['parent_delivery_summary']:
         
         #parent_df = pd.DataFrame(results['parent_delivery_summary'].items(), columns=['Parent','Total Count'])
@@ -3737,17 +3820,17 @@ def display_dtedc_analysis():
         grouped_df = filtered_df.groupby('Group')['Total Deliveries'].sum().reset_index()
         grouped_df.rename(columns={'Group': 'Parent'}, inplace=True)
 
-        st.subheader('Delivery Breakdown by Parent')
+        st.subheader('🌐 Delivery Breakdown by Parent')
         parent_df['Parent'] = parent_df['Parent'].replace('CDD', 'DataIQ')
         st.dataframe(parent_df, use_container_width=True, hide_index=True)
-    
         
-        st.subheader("Operations Delivery Breakdown")
-                    #fig = px.pie(grouped_df, values='Total Count', names='Parent')
-            # Create bar chart
+        st.subheader("📦 Operations Delivery Breakdown")
             
+        # Sort the dataframe by Total Deliveries in ascending order
+        grouped_df_sorted = grouped_df.sort_values('Total Deliveries', ascending=True)
+
         fig = px.bar(
-        grouped_df,
+        grouped_df_sorted,  # Use the sorted dataframe
         x='Parent',
         y='Total Deliveries',
         text='Total Deliveries',
@@ -3755,7 +3838,7 @@ def display_dtedc_analysis():
         )
 
         # Calculate max value for proper Y-axis range
-        max_value = grouped_df['Total Deliveries'].max()
+        max_value = grouped_df_sorted['Total Deliveries'].max()
 
         # Update layout with fixed dimensions and larger, clearer text
         fig.update_layout(
@@ -3788,7 +3871,7 @@ def display_dtedc_analysis():
             
             # Layout properties
             plot_bgcolor='white',
-            margin=dict(l=80, r=60, t=100, b=120),  # Increased top margin from 80 to 100
+            margin=dict(l=80, r=60, t=90, b=120),  # Increased top margin from 80 to 100
             dragmode=False  # Prevents dragging/resizing
         )
 
@@ -3805,39 +3888,26 @@ def display_dtedc_analysis():
         st.plotly_chart(fig, use_container_width=True)
         
             
-    # Define the data
-    data = {
-        "Acronym": ["ARA", "AIML", "DataIQ", "LPD", "EMR", "Alert Engine"],
-        "Definition": [
-            "Onboarding, either from DataIQ or a data owner. The data is checked, prepared, and the ETL process is run, followed by automated tests to ensure completion. After integrating and performing QA in DEV, DEMO, and LIVE environments, a 'Go Live' notification is sent to stakeholders once everything is verified.",
-            "Client delivery in AIML platform apps like PJ, ST, expert ecosystem, consumer profile for multiple regions like US and X-US (UK, BE, GE, IT, CA etc) and also takes care of Pfizer monthly reports and regular weekly claims refreshes.",
-            "Loading of multiple data assets to Central Data Distribution Platform for ARA and OMOP Team.",
-            "Involves validating the integrity and accuracy of data files loaded via the ETL Informatica into Oracle databases ensuring it meets QC guidelines and maintain data delivery frequency. Longitudinal Patient Data (LPD) is also a source of data for CDD (DataIQ) that serves OMOP or ARA (E360).",
-            "Loading of data from supplier QC monitoring querying triggering of jobs and delivery to internal teams (UK DE IT US).",
-            "Data is received from the data scientist team then to be QC'd (trend volume formats etc.) to be delivered to external pharmaceutical clients (11)."
-        ]
-    }
+        # Define the data
+        data = {
+            "Acronym": ["ARA", "AIML", "DataIQ", "LPD", "EMR", "Alert Engine"],
+            "Definition": [
+                "Onboarding, either from DataIQ or a data owner. The data is checked, prepared, and the ETL process is run, followed by automated tests to ensure completion. After integrating and performing QA in DEV, DEMO, and LIVE environments, a 'Go Live' notification is sent to stakeholders once everything is verified.",
+                "Client delivery in AIML platform apps like PJ, ST, expert ecosystem, consumer profile for multiple regions like US and X-US (UK, BE, GE, IT, CA etc) and also takes care of Pfizer monthly reports and regular weekly claims refreshes.",
+                "Loading of multiple data assets to Central Data Distribution Platform for ARA and OMOP Team.",
+                "Involves validating the integrity and accuracy of data files loaded via the ETL Informatica into Oracle databases ensuring it meets QC guidelines and maintain data delivery frequency. Longitudinal Patient Data (LPD) is also a source of data for CDD (DataIQ) that serves OMOP or ARA (E360).",
+                "Loading of data from supplier QC monitoring querying triggering of jobs and delivery to internal teams (UK DE IT US).",
+                "Data is received from the data scientist team then to be QC'd (trend volume formats etc.) to be delivered to external pharmaceutical clients (11)."
+            ]
+        }
 
-    # Create a DataFrame
-    df = pd.DataFrame(data)
+        # Create a DataFrame
+        df = pd.DataFrame(data)
 
-    # Streamlit app
-    st.header('Key Definitions of Activities/Delivery')
-    st.dataframe(df, use_container_width=True, hide_index=True)
+        # Streamlit app
+        st.header('Key Definitions of Activities/Delivery')
+        st.dataframe(df, use_container_width=True, hide_index=True)
     
-    # Metrics description table
-    metrics_df = pd.DataFrame({
-        "Metric": ["Completion Rate", "Cancelled Rate", "On Time Rate", "Delay Rate"],
-        "Description": [
-            results['metrics']['completion_rate']['description'],
-            results['metrics']['cancelled_rate']['description'],
-            results['metrics']['on_time_rate']['description'],
-            results['metrics']['delay_rate']['description']
-        ]
-    })
-
-    with st.expander("View Aggregated Metrics"):
-        st.dataframe(metrics_df, use_container_width=True, hide_index=True)
         
 #ProdOps Section   
 def filter_dev_star_stories(df):
@@ -5031,6 +5101,8 @@ def prepare_response_resolution_data(df, start_date, end_date):
     # Convert resolution date
     df['resolutiondate'] = pd.to_datetime(df.get('resolutiondate', df.get('resolutiondate', '')), errors='coerce', utc=True)
     
+    end_date = end_date.replace(hour=23, minute=59, second=59)
+    
     # Filter by date range
     df = df[(df['resolutiondate'] >= start_date) & (df['resolutiondate'] <= end_date)]
     
@@ -5043,6 +5115,8 @@ def prepare_response_resolution_data(df, start_date, end_date):
         df['issuetype'].str.contains('Incident', case=False, na=False) & 
         ~df['issuetype'].str.contains('Post', case=False, na=False)
     ]
+    
+
     
     # Add month column
     df['resolution_month'] = df['resolutiondate'].dt.strftime('%B')
@@ -5164,6 +5238,8 @@ def create_first_response_column_chart(df, start_date, end_date):
                     'Average_Minutes': avg_minutes,
                     'Label': label
                 })
+    
+
     
     # Create DataFrame
     plot_df = pd.DataFrame(monthly_data)
@@ -5772,7 +5848,19 @@ def display_response_resolution():
     st.header("⏱️ Response and Resolution Time Analysis")
     
     if 'issues_df' not in st.session_state.jira_data:
-        st.warning("Please fetch Jira data first to generate response and resolution analysis.")
+        st.warning("Please fetch Jira data first to generate support overview.")
+        return
+    
+    df = st.session_state.jira_data['issues_df']
+    start_date = pd.to_datetime(st.session_state.get('start_date', datetime.now()))
+    end_date = pd.to_datetime(st.session_state.get('end_date', datetime.now()))
+    
+    if 'project_name' in df.columns:
+        if 'Production & Support' not in df['project_name'].values:
+            st.warning("The Production & Support project not found in the fetched data.")
+            return
+    else:
+        st.error("Project name field not found in data.")
         return
     
     df = st.session_state.jira_data['issues_df']
@@ -6177,8 +6265,27 @@ def display_cause_code_analysis():
 
         st.metric("Analysis Period", date_range)
     
+        # Display data summary
     st.markdown("---")
+    st.subheader("📋 Data Summary")
     
+    # Show country mapping results
+    if 'country' in filtered_df.columns:
+        with st.expander("View Country Distribution"):
+            country_counts = filtered_df['country'].value_counts()
+            country_df = pd.DataFrame({
+                'Country': country_counts.index,
+                'Incident Count': country_counts.values
+            })
+            st.dataframe(country_df, use_container_width=True, hide_index= True)
+    
+    # Show filtered data
+    with st.expander("View Filtered HDEPS Incidents"):
+        display_cols = ['key', 'country', 'status', 'priority', 'resolutiondate', 'ticket_resolution']
+        available_cols = [col for col in display_cols if col in filtered_df.columns]
+        st.dataframe(filtered_df[available_cols], use_container_width=True, hide_index= True)     
+        
+    st.markdown("---")    
     # Task 1: Horizontal Bar Chart (Last Month Only)
     st.subheader(f"📊 Incidents by Cause Code - {last_month_name}")
     
@@ -6219,27 +6326,7 @@ def display_cause_code_analysis():
         #    st.warning(task2_message)
             
     except Exception as e:
-        st.error(f"Error creating Task 2 chart: {str(e)}")
-    
-    # Display data summary
-    st.markdown("---")
-    st.subheader("📋 Data Summary")
-    
-    # Show country mapping results
-    if 'country' in filtered_df.columns:
-        with st.expander("View Country Distribution"):
-            country_counts = filtered_df['country'].value_counts()
-            country_df = pd.DataFrame({
-                'Country': country_counts.index,
-                'Incident Count': country_counts.values
-            })
-            st.dataframe(country_df, use_container_width=True, hide_index= True)
-    
-    # Show filtered data
-    with st.expander("View Filtered HDEPS Incidents"):
-        display_cols = ['key', 'country', 'status', 'priority', 'resolutiondate', 'ticket_resolution']
-        available_cols = [col for col in display_cols if col in filtered_df.columns]
-        st.dataframe(filtered_df[available_cols], use_container_width=True, hide_index= True)       
+        st.error(f"Error creating Task 2 chart: {str(e)}")  
 
 if __name__ == "__main__":
     try:
