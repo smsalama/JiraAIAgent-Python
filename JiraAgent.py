@@ -26,8 +26,6 @@ from docx import Document
 import re
 import anthropic
 
-#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
-
 # Suppress SSL warnings
 warnings.filterwarnings('ignore', message='urllib3 v2 only supports OpenSSL')
 
