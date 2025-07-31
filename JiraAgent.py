@@ -9,7 +9,7 @@ import json
 import base64
 import io
 import re
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple, Union
 import time
 from dataclasses import dataclass
 import hashlib
@@ -23,12 +23,22 @@ import plotly.io as pio
 import numpy as np
 import ast
 from docx import Document
-import openai
 import re
+import anthropic
 
+#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
 
 # Suppress SSL warnings
 warnings.filterwarnings('ignore', message='urllib3 v2 only supports OpenSSL')
+
+# Handle Anthropic import with graceful fallback
+try:
+    ANTHROPIC_AVAILABLE = True
+except ImportError as e:
+    ANTHROPIC_AVAILABLE = False
+    st.error(f"❌ Anthropic library not found. Please install it using: pip install anthropic")
+    st.info("💡 The system will run in basic mode without AI integration.")
+
 
 # Handle additional imports for PDF with fallback
 try:
@@ -331,746 +341,983 @@ class DocumentParser:
                     
         return prompts
 
-class EnhancedAIAgent:
-    def __init__(self):
-        self.similarity_threshold = 0.7
-        self.stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should'}
+###AI Agent Class added here.####
+class ClaudeJiraAI:
+    """Claude AI-powered intelligent Jira data analysis agent"""
     
-    def generate_insights(self, data: Dict[str, Any], prompt: str = "") -> str:
-        """Generate intelligent insights from Jira data with enhanced analysis"""
-        return self._generate_enhanced_insights(data, prompt)
+    def __init__(self, api_key: str):
+        """Initialize Claude AI with API key"""
+        self.client = anthropic.Anthropic(api_key=api_key)
+        self.model = "claude-3-5-sonnet-20241022"  # Latest Claude model
+        
+        # System prompts for different analysis contexts
+        self.system_prompts = {
+            'data_analyst': """You are an expert Jira data analyst and software development consultant. 
+            You analyze development team data to provide actionable insights about:
+            - Team performance and productivity
+            - Project health and progress
+            - Workflow bottlenecks and inefficiencies
+            - Quality metrics and trends
+            - Resource allocation and workload distribution
+            
+            Always provide specific, data-driven recommendations that teams can implement immediately.
+            Focus on practical solutions and highlight both positive patterns and areas for improvement.""",
+            
+            'visualization_expert': """You are a data visualization specialist who recommends optimal chart types for different data scenarios.
+            Consider factors like:
+            - Data type (categorical, numerical, temporal)
+            - Number of data points and categories
+            - The story the data should tell
+            - User's analytical goals
+            
+            Recommend specific chart types and explain your reasoning.""",
+            
+            'insight_generator': """You are an AI that generates deep, actionable insights from software development data.
+            Look for:
+            - Performance patterns and anomalies
+            - Productivity trends and correlations
+            - Risk indicators and early warnings
+            - Optimization opportunities
+            - Team dynamics and collaboration patterns
+            
+            Provide concrete, implementable recommendations with clear business impact."""
+        }
     
-    def perform_root_cause_analysis(self, df: pd.DataFrame, target_issue: str = None) -> Dict[str, Any]:
-        """Perform comprehensive root cause analysis on issues"""
-        try:
-            # If no specific issue provided, analyze patterns in failed/blocked issues
-            if target_issue:
-                issue_data = df[df['key'] == target_issue]
-                if issue_data.empty:
-                    return {"error": f"Issue {target_issue} not found"}
-                analysis_df = issue_data
-            else:
-                # Analyze problematic issues (bugs, failed, blocked, etc.)
-                problem_statuses = ['Failed', 'Blocked', 'Rejected', 'Cancelled', 'Bug Found', 'Error']
-                problem_types = ['Bug', 'Defect', 'Issue', 'Problem', 'Error']
-                
-                analysis_df = df[
-                    (df['status'].str.contains('|'.join(problem_statuses), case=False, na=False)) | 
-                    (df['issuetype'].str.contains('|'.join(problem_types), case=False, na=False)) |
-                    (df['priority'].isin(['High', 'Critical', 'Highest', 'Blocker']))
-                ]
-            
-            if analysis_df.empty:
-                return {"message": "No problematic issues found for root cause analysis"}
-            
-            # Perform comprehensive root cause analysis
-            root_causes = self._identify_root_causes(analysis_df, df)
-            similar_issues = self._find_similar_issues(analysis_df, df)
-            resolution_patterns = self._analyze_resolution_patterns(similar_issues, df)
-            common_patterns = self._extract_common_patterns(analysis_df)
-            recommendations = self._generate_recommendations(root_causes, resolution_patterns, common_patterns)
-            
-            return {
-                "total_analyzed": len(analysis_df),
-                "root_causes": root_causes,
-                "similar_issues": similar_issues,
-                "resolution_patterns": resolution_patterns,
-                "common_patterns": common_patterns,
-                "recommendations": recommendations,
-                "insights": self._generate_root_cause_insights(root_causes, similar_issues, resolution_patterns)
-            }
-            
-        except Exception as e:
-            return {"error": f"Root cause analysis failed: {str(e)}"}
-    
-    def find_similar_issues(self, df: pd.DataFrame, reference_issue: str) -> List[Dict]:
-        """Find issues similar to a reference issue using advanced text analysis"""
-        try:
-            ref_issue = df[df['key'] == reference_issue]
-            if ref_issue.empty:
-                return []
-            
-            ref_summary = ref_issue.iloc[0]['summary']
-            ref_description = ref_issue.iloc[0].get('description', '')
-            ref_type = ref_issue.iloc[0]['issuetype']
-            ref_priority = ref_issue.iloc[0].get('priority', 'Medium')
-            
-            # Calculate similarity scores
-            similar_issues = []
-            for idx, row in df.iterrows():
-                if row['key'] == reference_issue:
-                    continue
-                
-                # Calculate multi-factor similarity
-                summary_similarity = self._calculate_similarity(ref_summary, row['summary'])
-                
-                # Description similarity (if available)
-                desc_similarity = 0
-                if ref_description and 'description' in row and row['description']:
-                    desc_similarity = self._calculate_similarity(ref_description, row['description'])
-                
-                # Combined similarity score
-                similarity_score = summary_similarity * 0.7 + desc_similarity * 0.3
-                
-                # Boost score for same issue type
-                if row['issuetype'] == ref_type:
-                    similarity_score += 0.15
-                
-                # Boost score for similar priority
-                if row.get('priority') == ref_priority:
-                    similarity_score += 0.1
-                
-                # Boost for similar components or labels
-                if 'components' in ref_issue.columns and 'components' in row:
-                    if ref_issue.iloc[0]['components'] == row['components']:
-                        similarity_score += 0.05
-                
-                if similarity_score >= self.similarity_threshold:
-                    resolution_info = self._get_resolution_info(row)
-                    similar_issues.append({
-                        'key': row['key'],
-                        'summary': row['summary'],
-                        'similarity_score': round(similarity_score, 3),
-                        'status': row['status'],
-                        'resolution_days': row.get('resolution_days', 'N/A'),
-                        'resolution_info': resolution_info,
-                        'assignee': row.get('assignee', 'Unassigned')
-                    })
-            
-            return sorted(similar_issues, key=lambda x: x['similarity_score'], reverse=True)[:20]
-            
-        except Exception as e:
-            return [{"error": f"Similarity analysis failed: {str(e)}"}]
-    
-    def _calculate_similarity(self, text1: str, text2: str) -> float:
-        """Calculate enhanced text similarity using multiple techniques"""
-        try:
-            if not text1 or not text2:
-                return 0.0
-            
-            # Normalize texts
-            text1_lower = text1.lower()
-            text2_lower = text2.lower()
-            
-            # Word-based similarity
-            words1 = set(word for word in text1_lower.split() if word not in self.stop_words and len(word) > 2)
-            words2 = set(word for word in text2_lower.split() if word not in self.stop_words and len(word) > 2)
-            
-            if not words1 or not words2:
-                return 0.0
-            
-            # Jaccard similarity
-            intersection = words1.intersection(words2)
-            union = words1.union(words2)
-            jaccard_similarity = len(intersection) / len(union) if union else 0
-            
-            # N-gram similarity (for catching similar phrases)
-            ngram_similarity = self._calculate_ngram_similarity(text1_lower, text2_lower, n=2)
-            
-            # Technical terms boost
-            tech_terms = {
-                'error', 'bug', 'issue', 'problem', 'failure', 'exception', 'timeout', 
-                'connection', 'database', 'api', 'server', 'client', 'performance',
-                'crash', 'memory', 'leak', 'security', 'authentication', 'authorization',
-                'null', 'undefined', 'invalid', 'missing', 'corrupt', 'deadlock'
-            }
-            tech_overlap = len(words1.intersection(words2).intersection(tech_terms))
-            tech_boost = min(tech_overlap * 0.1, 0.3)
-            
-            # Error pattern matching
-            error_patterns = [
-                r'\b\d{3}\b',  # HTTP status codes
-                r'exception|error|fail',
-                r'null|undefined|missing',
-                r'timeout|connection'
-            ]
-            
-            pattern_match_boost = 0
-            for pattern in error_patterns:
-                if re.search(pattern, text1_lower) and re.search(pattern, text2_lower):
-                    pattern_match_boost += 0.05
-            
-            # Combined score
-            final_score = (
-                jaccard_similarity * 0.5 + 
-                ngram_similarity * 0.3 + 
-                tech_boost + 
-                pattern_match_boost
-            )
-            
-            return min(final_score, 1.0)
-            
-        except Exception:
-            return 0.0
-    
-    def _calculate_ngram_similarity(self, text1: str, text2: str, n: int = 2) -> float:
-        """Calculate n-gram similarity between texts"""
-        try:
-            def get_ngrams(text, n):
-                words = text.split()
-                return set(' '.join(words[i:i+n]) for i in range(len(words)-n+1))
-            
-            ngrams1 = get_ngrams(text1, n)
-            ngrams2 = get_ngrams(text2, n)
-            
-            if not ngrams1 or not ngrams2:
-                return 0.0
-            
-            intersection = ngrams1.intersection(ngrams2)
-            union = ngrams1.union(ngrams2)
-            
-            return len(intersection) / len(union) if union else 0
-            
-        except Exception:
-            return 0.0
-    
-    def _identify_root_causes(self, problem_df: pd.DataFrame, full_df: pd.DataFrame) -> Dict[str, Any]:
-        """Identify comprehensive root causes from problem patterns"""
-        try:
-            root_causes = {}
-            
-            # Analyze by assignee patterns
-            if 'assignee' in problem_df.columns:
-                assignee_problems = problem_df['assignee'].value_counts()
-                if not assignee_problems.empty:
-                    total_assignee_issues = full_df['assignee'].value_counts()
-                    assignee_problem_rate = {}
-                    
-                    for assignee in assignee_problems.index:
-                        if assignee in total_assignee_issues.index:
-                            rate = (assignee_problems[assignee] / total_assignee_issues[assignee]) * 100
-                            assignee_problem_rate[assignee] = {
-                                'problem_count': int(assignee_problems[assignee]),
-                                'total_count': int(total_assignee_issues[assignee]),
-                                'problem_rate': round(rate, 1)
-                            }
-                    
-                    root_causes['assignee_patterns'] = assignee_problem_rate
-            
-            # Analyze by component/area patterns
-            if 'components' in problem_df.columns:
-                component_problems = problem_df['components'].value_counts()
-                if not component_problems.empty:
-                    root_causes['component_patterns'] = {
-                        comp: {'issue_count': int(count), 'percentage': round((count/len(problem_df))*100, 1)}
-                        for comp, count in component_problems.head(5).items()
-                    }
-            
-            # Analyze timing patterns
-            if 'created_dt' in problem_df.columns:
-                problem_df_clean = problem_df.dropna(subset=['created_dt'])
-                if not problem_df_clean.empty:
-                    problem_df_clean['hour'] = problem_df_clean['created_dt'].dt.hour
-                    problem_df_clean['day_of_week'] = problem_df_clean['created_dt'].dt.day_name()
-                    problem_df_clean['week_of_month'] = problem_df_clean['created_dt'].dt.day // 7 + 1
-                    
-                    # Hour patterns
-                    hour_distribution = problem_df_clean['hour'].value_counts().sort_index()
-                    peak_hours = hour_distribution.nlargest(3).index.tolist()
-                    
-                    # Day patterns
-                    day_distribution = problem_df_clean['day_of_week'].value_counts()
-                    peak_days = day_distribution.nlargest(2).index.tolist()
-                    
-                    root_causes['timing_patterns'] = {
-                        'peak_hours': peak_hours,
-                        'peak_days': peak_days,
-                        'hour_distribution': dict(hour_distribution),
-                        'day_distribution': dict(day_distribution)
-                    }
-            
-            # Analyze issue type patterns
-            if 'issuetype' in problem_df.columns:
-                type_problems = problem_df['issuetype'].value_counts()
-                root_causes['issue_type_patterns'] = {
-                    issue_type: {
-                        'count': int(count),
-                        'percentage': round((count/len(problem_df))*100, 1)
-                    }
-                    for issue_type, count in type_problems.items()
-                }
-            
-            # Analyze keyword patterns in summaries
-            keywords = self._extract_problem_keywords(problem_df)
-            if keywords:
-                root_causes['keyword_patterns'] = keywords
-            
-            # Analyze labels if available
-            if 'labels' in problem_df.columns:
-                label_patterns = self._analyze_label_patterns(problem_df)
-                if label_patterns:
-                    root_causes['label_patterns'] = label_patterns
-            
-            return root_causes
-            
-        except Exception as e:
-            return {"error": f"Root cause identification failed: {str(e)}"}
-    
-    def _extract_problem_keywords(self, df: pd.DataFrame) -> Dict[str, int]:
-        """Extract common keywords from problem descriptions"""
-        try:
-            if 'summary' not in df.columns:
-                return {}
-            
-            # Common problem indicators
-            problem_keywords = {
-                'error', 'fail', 'bug', 'issue', 'problem', 'crash', 'timeout',
-                'slow', 'performance', 'memory', 'leak', 'security', 'connection',
-                'database', 'api', 'authentication', 'null', 'undefined', 'missing',
-                'incorrect', 'invalid', 'broken', 'deadlock', 'race', 'condition'
-            }
-            
-            keyword_counts = {}
-            
-            for summary in df['summary'].dropna():
-                words = summary.lower().split()
-                for word in words:
-                    clean_word = re.sub(r'[^\w\s]', '', word)
-                    if clean_word in problem_keywords:
-                        keyword_counts[clean_word] = keyword_counts.get(clean_word, 0) + 1
-            
-            # Return top keywords
-            return dict(sorted(keyword_counts.items(), key=lambda x: x[1], reverse=True)[:10])
-            
-        except Exception:
-            return {}
-    
-    def _analyze_label_patterns(self, df: pd.DataFrame) -> Dict[str, int]:
-        """Analyze label patterns in problematic issues"""
-        try:
-            all_labels = []
-            for labels_str in df['labels'].dropna():
-                if labels_str:
-                    labels = [label.strip() for label in labels_str.split(',')]
-                    all_labels.extend(labels)
-            
-            if not all_labels:
-                return {}
-            
-            label_counts = pd.Series(all_labels).value_counts()
-            return dict(label_counts.head(10))
-            
-        except Exception:
-            return {}
-    
-    def _extract_common_patterns(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Extract common patterns from problematic issues"""
-        try:
-            patterns = {}
-            
-            # Extract error message patterns
-            if 'summary' in df.columns:
-                error_patterns = self._extract_error_patterns(df['summary'])
-                if error_patterns:
-                    patterns['error_patterns'] = error_patterns
-            
-            # Extract resolution patterns for resolved issues
-            resolved_df = df[df['status'].isin(['Done', 'Resolved', 'Closed'])]
-            if not resolved_df.empty and 'resolution_days' in resolved_df.columns:
-                resolution_stats = {
-                    'avg_resolution_days': round(resolved_df['resolution_days'].mean(), 1),
-                    'median_resolution_days': round(resolved_df['resolution_days'].median(), 1),
-                    'resolution_rate': round((len(resolved_df) / len(df)) * 100, 1)
-                }
-                patterns['resolution_stats'] = resolution_stats
-            
-            return patterns
-            
-        except Exception:
-            return {}
-    
-
-
-    def _extract_error_patterns(self, summaries: pd.Series) -> List[Dict[str, Any]]:
-        """Extract common error patterns from issue summaries"""
-        try:
-            error_patterns = []
-            
-            # Common error pattern regexes
-            patterns_to_check = [
-                (r'(\w+)Error\b', 'Error Types'),
-                (r'(\w+)Exception\b', 'Exception Types'),
-                (r'HTTP\s*(\d{3})', 'HTTP Status Codes'),
-                (r'timeout|timed out', 'Timeout Issues'),
-                (r'null|undefined|NaN', 'Null Reference Issues'),
-                (r'memory|heap|OOM', 'Memory Issues'),
-                (r'connection|network', 'Connection Issues'),
-                (r'permission|access denied|unauthorized', 'Permission Issues')
-            ]
-            
-            for pattern, category in patterns_to_check:
-                matches = []
-                for summary in summaries.dropna():
-                    found = re.findall(pattern, summary, re.IGNORECASE)
-                    matches.extend(found)
-                
-                if matches:
-                    match_counts = pd.Series(matches).value_counts()
-                    error_patterns.append({
-                        'category': category,
-                        'patterns': dict(match_counts.head(5))
-                    })
-            
-            return error_patterns
-            
-        except Exception:
-            return []
-    
-    def _find_similar_issues(self, problem_df: pd.DataFrame, full_df: pd.DataFrame) -> List[Dict]:
-        """Find groups of similar issues with enhanced pattern matching"""
-        try:
-            similar_groups = {}
-            processed_issues = set()
-            
-            # Group by similar summaries and descriptions
-            for idx, row in problem_df.iterrows():
-                if row['key'] in processed_issues:
-                    continue
-                
-                summary_words = set(word.lower() for word in row['summary'].split() 
-                                  if word.lower() not in self.stop_words and len(word) > 2)
-                
-                # Find all similar issues
-                group_issues = [row['key']]
-                group_words = summary_words.copy()
-                
-                for idx2, row2 in full_df.iterrows():
-                    if row2['key'] == row['key'] or row2['key'] in processed_issues:
-                        continue
-                    
-                    similarity = self._calculate_similarity(row['summary'], row2['summary'])
-                    if similarity >= 0.5:  # Lower threshold for grouping
-                        group_issues.append(row2['key'])
-                        words2 = set(word.lower() for word in row2['summary'].split() 
-                                   if word.lower() not in self.stop_words and len(word) > 2)
-                        group_words.update(words2)
-                
-                if len(group_issues) > 1:
-                    # Extract common pattern from group
-                    common_words = list(group_words)[:5]
-                    pattern = ' '.join(common_words)
-                    
-                    group_key = f"group_{len(similar_groups) + 1}"
-                    similar_groups[group_key] = {
-                        'issues': group_issues[:10],  # Limit for display
-                        'pattern': pattern,
-                        'issue_count': len(group_issues),
-                        'sample_summary': row['summary']
-                    }
-                    
-                    processed_issues.update(group_issues)
-            
-            # Return sorted by issue count
-            result = []
-            for group_key, group_data in similar_groups.items():
-                result.append({
-                    'pattern': group_data['pattern'],
-                    'issue_count': group_data['issue_count'],
-                    'issues': group_data['issues'],
-                    'sample_summary': group_data['sample_summary']
-                })
-            
-            return sorted(result, key=lambda x: x['issue_count'], reverse=True)[:10]
-            
-        except Exception as e:
-            return [{"error": f"Similar issue detection failed: {str(e)}"}]
-    
-    def _analyze_resolution_patterns(self, similar_issues: List[Dict], full_df: pd.DataFrame) -> Dict[str, Any]:
-        """Analyze how similar issues were resolved with detailed insights"""
-        try:
-            if not similar_issues:
-                return {"message": "No similar issues found for resolution analysis"}
-            
-            resolution_patterns = {}
-            
-            for group in similar_issues:
-                if 'error' in group:
-                    continue
-                    
-                all_issues = full_df[full_df['key'].isin(group['issues'])]
-                resolved_issues = all_issues[
-                    all_issues['status'].isin(['Done', 'Resolved', 'Closed'])
-                ]
-                
-                if not resolved_issues.empty:
-                    pattern_data = {
-                        'total_issues': len(all_issues),
-                        'resolved_count': len(resolved_issues),
-                        'resolution_rate': round((len(resolved_issues) / len(all_issues)) * 100, 1)
-                    }
-                    
-                    # Resolution time analysis
-                    if 'resolution_days' in resolved_issues.columns:
-                        res_days = resolved_issues['resolution_days'].dropna()
-                        if not res_days.empty:
-                            pattern_data.update({
-                                'avg_resolution_days': round(res_days.mean(), 1),
-                                'median_resolution_days': round(res_days.median(), 1),
-                                'min_resolution_days': round(res_days.min(), 1),
-                                'max_resolution_days': round(res_days.max(), 1)
-                            })
-                    
-                    # Resolution method analysis (from assignees who resolved)
-                    if 'assignee' in resolved_issues.columns:
-                        top_resolvers = resolved_issues['assignee'].value_counts().head(3)
-                        pattern_data['top_resolvers'] = dict(top_resolvers)
-                    
-                    resolution_patterns[group['pattern']] = pattern_data
-            
-            return resolution_patterns
-            
-        except Exception as e:
-            return {"error": f"Resolution pattern analysis failed: {str(e)}"}
-    
-    def _get_resolution_info(self, issue_row: pd.Series) -> Dict[str, Any]:
-        """Get resolution information for an issue"""
-        try:
-            resolution_info = {
-                'status': issue_row.get('status', 'Unknown'),
-                'is_resolved': issue_row.get('status', '') in ['Done', 'Resolved', 'Closed']
-            }
-            
-            if 'resolution_days' in issue_row and pd.notna(issue_row['resolution_days']):
-                resolution_info['resolution_days'] = round(issue_row['resolution_days'], 1)
-            
-            if 'assignee' in issue_row:
-                resolution_info['resolved_by'] = issue_row['assignee']
-            
-            return resolution_info
-            
-        except Exception:
-            return {}
-    
-    def _generate_recommendations(self, root_causes: Dict, resolution_patterns: Dict, common_patterns: Dict) -> List[str]:
-        """Generate enhanced actionable recommendations based on comprehensive analysis"""
-        recommendations = []
+    def analyze_user_question(self, question: str, data_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze user question using Claude AI to understand intent and requirements"""
+        
+        prompt = f"""
+        Analyze this user question about Jira development data: "{question}"
+        
+        Available data context:
+        - Total issues: {data_context.get('total_issues', 0)}
+        - Available fields: {', '.join(data_context.get('fields', []))}
+        - Date range: {data_context.get('date_range', 'Unknown')}
+        - Projects: {', '.join(data_context.get('projects', []))}
+        - Team size: {data_context.get('team_size', 0)} members
+        - Status distribution: {data_context.get('status_summary', {})}
+        
+        Determine the user's intent and return a JSON response with:
+        {{
+            "analysis_type": "summary|comparison|trend|breakdown|performance|prediction|correlation|ranking",
+            "visualization_type": "bar|pie|line|scatter|heatmap|table|sunburst|treemap|funnel|gauge",
+            "primary_field": "main field to analyze",
+            "secondary_field": "secondary field for comparison/grouping",
+            "grouping_strategy": "how to group the data",
+            "time_dimension": "if time-based analysis is needed",
+            "filters": {{"field": "value"}},
+            "metrics_to_calculate": ["list of metrics to compute"],
+            "confidence": 0.0-1.0,
+            "explanation": "brief explanation of analysis approach",
+            "expected_insights": ["list of insights this analysis should reveal"]
+        }}
+        
+        Focus on what would provide the most valuable insights for a software development team.
+        """
         
         try:
-            # Assignee-based recommendations
-            if 'assignee_patterns' in root_causes:
-                assignee_data = root_causes['assignee_patterns']
-                high_problem_assignees = [
-                    (assignee, data) for assignee, data in assignee_data.items() 
-                    if data['problem_rate'] > 30
-                ]
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=1000,
+                system=self.system_prompts['data_analyst'],
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            # Extract JSON from Claude's response
+            content = response.content[0].text
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            
+            if json_match:
+                return json.loads(json_match.group())
+            else:
+                # Fallback if JSON extraction fails
+                return self._create_fallback_intent(question)
                 
-                for assignee, data in high_problem_assignees[:3]:
-                    recommendations.append(
-                        f"🎯 **{assignee}**: {data['problem_rate']}% problem rate "
-                        f"({data['problem_count']}/{data['total_count']} issues). "
-                        f"Consider: Additional training, pair programming, or workload review."
-                    )
-            
-            # Component-based recommendations
-            if 'component_patterns' in root_causes:
-                top_components = list(root_causes['component_patterns'].items())[:2]
-                for component, data in top_components:
-                    if data['percentage'] > 20:
-                        recommendations.append(
-                            f"🔧 **{component} Component**: {data['percentage']}% of problems. "
-                            f"Actions: Conduct code review, add unit tests, consider refactoring."
-                        )
-            
-            # Timing-based recommendations
-            if 'timing_patterns' in root_causes:
-                timing = root_causes['timing_patterns']
-                if timing.get('peak_hours'):
-                    peak_hours_str = ', '.join([f"{h}:00" for h in timing['peak_hours']])
-                    recommendations.append(
-                        f"⏰ **Deployment Timing**: High problem rates at {peak_hours_str}. "
-                        f"Consider: Avoid deployments during these hours, increase monitoring."
-                    )
-                
-                if timing.get('peak_days'):
-                    peak_days_str = ', '.join(timing['peak_days'])
-                    recommendations.append(
-                        f"📅 **Weekly Pattern**: Problems peak on {peak_days_str}. "
-                        f"Consider: Schedule critical work mid-week, review weekend processes."
-                    )
-            
-            # Keyword-based recommendations
-            if 'keyword_patterns' in root_causes:
-                top_keywords = list(root_causes['keyword_patterns'].items())[:3]
-                if top_keywords:
-                    keyword_str = ', '.join([f"{k} ({v})" for k, v in top_keywords])
-                    recommendations.append(
-                        f"🔍 **Common Issues**: Frequent keywords: {keyword_str}. "
-                        f"Focus testing and monitoring on these areas."
-                    )
-            
-            # Resolution-based recommendations
-            if resolution_patterns:
-                high_success_patterns = [
-                    (pattern, data) for pattern, data in resolution_patterns.items()
-                    if isinstance(data, dict) and data.get('resolution_rate', 0) > 80
-                ]
-                
-                for pattern, data in high_success_patterns[:2]:
-                    avg_days = data.get('avg_resolution_days', 'N/A')
-                    recommendations.append(
-                        f"✅ **Success Pattern**: '{pattern[:50]}...' - {data['resolution_rate']}% resolved. "
-                        f"Avg resolution: {avg_days} days. Apply similar approach to new issues."
-                    )
-                
-                # Identify slow resolution patterns
-                slow_patterns = [
-                    (pattern, data) for pattern, data in resolution_patterns.items()
-                    if isinstance(data, dict) and data.get('avg_resolution_days', 0) > 30
-                ]
-                
-                for pattern, data in slow_patterns[:1]:
-                    recommendations.append(
-                        f"⚠️ **Slow Resolution**: '{pattern[:50]}...' takes {data['avg_resolution_days']} days avg. "
-                        f"Consider: Creating standard procedures, automation, or escalation paths."
-                    )
-            
-            # Error pattern recommendations
-            if 'error_patterns' in common_patterns:
-                for error_category in common_patterns['error_patterns'][:2]:
-                    category = error_category['category']
-                    top_pattern = list(error_category['patterns'].items())[0] if error_category['patterns'] else None
-                    if top_pattern:
-                        recommendations.append(
-                            f"🚨 **{category}**: Most common: {top_pattern[0]} ({top_pattern[1]} occurrences). "
-                            f"Implement specific error handling and monitoring."
-                        )
-            
-            # General process recommendations
-            if not recommendations:
-                recommendations.append(
-                    "📊 **General**: Insufficient patterns for specific recommendations. "
-                    "Continue monitoring and ensure comprehensive issue documentation."
-                )
-            
-            # Add a summary recommendation
-            if len(recommendations) > 3:
-                recommendations.insert(0, 
-                    "🎯 **Priority Actions**: Focus on top 3 recommendations below for maximum impact:"
-                )
-            
-            return recommendations
-            
-        except Exception:
-            return ["⚠️ Unable to generate recommendations due to data analysis issues."]
+        except Exception as e:
+            st.error(f"AI analysis error: {str(e)}")
+            return self._create_fallback_intent(question)
     
-    def _generate_root_cause_insights(self, root_causes: Dict, similar_issues: List, resolution_patterns: Dict) -> str:
-        """Generate narrative insights from root cause analysis"""
+    def generate_data_insights(self, analysis_results: Dict[str, Any], data_summary: Dict[str, Any]) -> str:
+        """Generate intelligent insights using Claude AI"""
+        
+        prompt = f"""
+        Analyze this Jira development team data and provide actionable insights:
+        
+        Data Summary:
+        {json.dumps(data_summary, indent=2, default=str)}
+        
+        Analysis Results:
+        {json.dumps(analysis_results, indent=2, default=str)}
+        
+        Provide a comprehensive analysis with:
+        
+        ## 🎯 Key Insights
+        - 3-5 most important findings about team performance
+        - Specific patterns or trends identified
+        - Performance benchmarks and comparisons
+        
+        ## ⚠️ Risks & Concerns
+        - Potential bottlenecks or issues to address
+        - Quality or productivity concerns
+        - Resource allocation problems
+        
+        ## 🚀 Recommendations
+        - Specific, actionable steps to improve performance
+        - Process optimizations
+        - Tool or workflow suggestions
+        
+        ## 📈 Positive Patterns
+        - What the team is doing well
+        - Successful practices to continue
+        - Strengths to leverage
+        
+        Make insights specific to software development teams and focus on practical, implementable recommendations.
+        Use emojis and clear formatting for readability.
+        """
+        
         try:
-            insights = []
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=1500,
+                system=self.system_prompts['insight_generator'],
+                messages=[{"role": "user", "content": prompt}]
+            )
             
-            # Overall pattern insight
-            if similar_issues and len(similar_issues) > 0:
-                total_similar = sum(group['issue_count'] for group in similar_issues if 'issue_count' in group)
-                insights.append(
-                    f"🔍 Identified {len(similar_issues)} distinct problem patterns affecting {total_similar} issues total."
-                )
-            
-            # Team insight
-            if 'assignee_patterns' in root_causes:
-                assignee_data = root_causes['assignee_patterns']
-                if assignee_data:
-                    highest_rate = max(data['problem_rate'] for data in assignee_data.values())
-                    insights.append(
-                        f"👥 Team problem rates range from minimal to {highest_rate:.1f}%, indicating varying skill levels or workload challenges."
-                    )
-            
-            # Timing insight
-            if 'timing_patterns' in root_causes:
-                timing = root_causes['timing_patterns']
-                if 'peak_hours' in timing and timing['peak_hours']:
-                    insights.append(
-                        f"⏰ Clear temporal patterns detected - problems cluster around specific times, suggesting process or system issues."
-                    )
-            
-            # Resolution insight
-            if resolution_patterns:
-                avg_rates = [data.get('resolution_rate', 0) for data in resolution_patterns.values() if isinstance(data, dict)]
-                if avg_rates:
-                    overall_resolution = sum(avg_rates) / len(avg_rates)
-                    insights.append(
-                        f"✅ Overall resolution rate: {overall_resolution:.1f}% - "
-                        f"{'Good problem-solving capability' if overall_resolution > 70 else 'Room for improvement in resolution processes'}."
-                    )
-            
-            return " | ".join(insights) if insights else "Analysis complete - review detailed findings above."
-            
-        except Exception:
-            return "Insight generation completed with partial results."
-    
-    def _generate_enhanced_insights(self, data: Dict[str, Any], prompt: str) -> str:
-        """Generate enhanced insights with pattern recognition and predictive analysis"""
-        try:
-            insights = []
-            
-            if 'issues_df' in data:
-                df = data['issues_df']
-                
-                # Basic metrics with context
-                total_issues = len(df)
-                insights.append(f"📊 **Dataset**: {total_issues} issues analyzed")
-                
-                # Quality metrics with trends
-                if 'issuetype' in df.columns:
-                    bug_count = len(df[df['issuetype'].str.contains('Bug|Defect', case=False, na=False)])
-                    if bug_count > 0:
-                        bug_ratio = (bug_count / total_issues) * 100
-                        quality_indicator = "🔴 Critical" if bug_ratio > 30 else "🟡 Moderate" if bug_ratio > 15 else "🟢 Good"
-                        insights.append(f"🐛 **Quality {quality_indicator}**: {bug_ratio:.1f}% bugs ({bug_count} issues)")
-                
-                # Performance insights with benchmarks
-                if 'status' in df.columns:
-                    completion_rate = (df['status'].isin(['Done', 'Resolved', 'Closed'])).mean() * 100
-                    performance = "Excellent" if completion_rate > 80 else "Good" if completion_rate > 60 else "Needs Improvement"
-                    insights.append(f"✅ **Performance - {performance}**: {completion_rate:.1f}% completion rate")
-                
-                # Team insights with balance analysis
-                if 'assignee' in df.columns:
-                    team_size = df['assignee'].nunique()
-                    avg_workload = total_issues / team_size if team_size > 0 else 0
-                    workload_std = df.groupby('assignee').size().std()
-                    balance = "Well-balanced" if workload_std < 5 else "Slightly uneven" if workload_std < 10 else "Highly uneven"
-                    insights.append(f"👥 **Team ({balance})**: {team_size} members, {avg_workload:.1f} avg issues/person")
-                
-                # Priority insights with urgency indicator
-                if 'priority' in df.columns:
-                    high_priority = len(df[df['priority'].isin(['High', 'Critical', 'Highest', 'Blocker'])])
-                    if high_priority > 0:
-                        priority_ratio = (high_priority / total_issues) * 100
-                        urgency = "🔥 Urgent attention needed" if priority_ratio > 25 else "⚠️ Monitor closely" if priority_ratio > 10 else "✓ Under control"
-                        insights.append(f"⚡ **Priority {urgency}**: {priority_ratio:.1f}% high/critical ({high_priority} issues)")
-                
-                # Resolution time insights with efficiency rating
-                if 'resolution_days' in df.columns:
-                    resolved_df = df.dropna(subset=['resolution_days'])
-                    if not resolved_df.empty:
-                        avg_resolution = resolved_df['resolution_days'].mean()
-                        median_resolution = resolved_df['resolution_days'].median()
-                        efficiency = "Fast" if avg_resolution < 7 else "Moderate" if avg_resolution < 21 else "Slow"
-                        insights.append(f"⏱️ **Resolution {efficiency}**: {avg_resolution:.1f} days avg, {median_resolution:.1f} days median")
-                
-                # Trend analysis
-                if 'created_dt' in df.columns:
-                    df_clean = df.dropna(subset=['created_dt'])
-                    if len(df_clean) > 7:
-                        recent_issues = df_clean[df_clean['created_dt'] >= (pd.Timestamp.now() - pd.Timedelta(days=7))]
-                        recent_rate = len(recent_issues) / 7
-                        trend = "📈 Increasing" if recent_rate > avg_workload else "📉 Decreasing" if recent_rate < avg_workload * 0.8 else "➡️ Stable"
-                        insights.append(f"📊 **Trend**: {trend} ({recent_rate:.1f} issues/day recently)")
-            
-            # Add context-specific insights based on prompt
-            if prompt:
-                prompt_lower = prompt.lower()
-                if 'root cause' in prompt_lower:
-                    insights.append("🔍 **Root Cause**: Use the root cause analysis feature for detailed problem patterns")
-                elif 'performance' in prompt_lower:
-                    insights.append("📈 **Performance**: Focus on completion rates and resolution times for improvement areas")
-                elif 'quality' in prompt_lower:
-                    insights.append("🎯 **Quality**: Monitor bug rates and implement preventive measures")
-            
-            return " | ".join(insights) if insights else "📊 Data analysis complete - ready for detailed exploration"
+            return response.content[0].text
             
         except Exception as e:
-            return f"⚠️ Enhanced analysis error: {str(e)}"
+            return f"**AI Insights:** Unable to generate detailed insights: {str(e)}"
+    
+    def create_intelligent_summary(self, df: pd.DataFrame, analysis_type: str) -> str:
+        """Create an intelligent summary of the data analysis"""
+        
+        # Prepare data summary for Claude
+        data_stats = {
+            'total_records': len(df),
+            'columns': list(df.columns),
+            'date_range': self._get_date_range(df),
+            'key_metrics': self._calculate_key_metrics(df)
+        }
+        
+        prompt = f"""
+        Create an intelligent summary for this {analysis_type} analysis of Jira data:
+        
+        Data Statistics:
+        {json.dumps(data_stats, indent=2, default=str)}
+        
+        Provide a concise but insightful summary that:
+        1. Explains what the data shows
+        2. Highlights the most important findings
+        3. Provides context for decision-making
+        4. Suggests next steps or follow-up analyses
+        
+        Keep it focused on software development team insights.
+        Format with clear sections and bullet points.
+        """
+        
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=800,
+                system=self.system_prompts['data_analyst'],
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            return response.content[0].text
+            
+        except Exception as e:
+            return f"Summary: Analysis of {len(df)} records completed. See visualization for details."
+    
+    def suggest_follow_up_questions(self, current_question: str, analysis_results: Dict[str, Any], available_fields: List[str]) -> List[str]:
+        """Generate intelligent follow-up questions using Claude"""
+        
+        prompt = f"""
+        Based on this Jira data analysis:
+        
+        Original Question: "{current_question}"
+        Analysis Type: {analysis_results.get('analysis_type', 'unknown')}
+        Available Data Fields: {', '.join(available_fields)}
+        
+        Suggest 5 intelligent follow-up questions that would provide deeper insights into:
+        - Team performance optimization
+        - Process improvement opportunities
+        - Risk identification and mitigation
+        - Quality and productivity metrics
+        - Resource allocation efficiency
+        
+        Make questions specific, actionable, and focused on software development team needs.
+        Return as a simple numbered list.
+        """
+        
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=600,
+                system=self.system_prompts['data_analyst'],
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            content = response.content[0].text
+            # Extract questions from numbered list
+            questions = []
+            for line in content.split('\n'):
+                if re.match(r'^\d+\.?\s+', line.strip()):
+                    question = re.sub(r'^\d+\.?\s+', '', line.strip())
+                    questions.append(question)
+            
+            return questions[:5]  # Return max 5 questions
+            
+        except Exception as e:
+            return [
+                "How can we improve our team's velocity?",
+                "What are the main bottlenecks in our workflow?",
+                "Which issues are taking longest to resolve?",
+                "How is workload distributed across team members?",
+                "What's our bug-to-feature ratio trend?"
+            ]
+    
+    def explain_visualization_choice(self, question: str, chart_type: str, data_context: Dict[str, Any]) -> str:
+        """Explain why a specific visualization was chosen"""
+        
+        prompt = f"""
+        Explain why "{chart_type}" is the optimal visualization for this analysis:
+        
+        User Question: "{question}"
+        Data Context: {json.dumps(data_context, default=str)}
+        
+        Provide a brief, educational explanation of:
+        - Why this chart type is best for this data
+        - What insights it helps reveal
+        - How to interpret the visualization
+        - Any limitations or considerations
+        
+        Keep it concise but informative.
+        """
+        
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=300,
+                system=self.system_prompts['visualization_expert'],
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            return response.content[0].text
+            
+        except Exception as e:
+            return f"Selected {chart_type} chart as optimal for this data analysis."
+    
+    def _create_fallback_intent(self, question: str) -> Dict[str, Any]:
+        """Create fallback analysis intent when Claude is unavailable"""
+        question_lower = question.lower()
+        
+        # Simple keyword-based analysis
+        if any(word in question_lower for word in ['trend', 'over time', 'timeline']):
+            analysis_type = 'trend'
+            viz_type = 'line'
+        elif any(word in question_lower for word in ['compare', 'vs', 'versus']):
+            analysis_type = 'comparison'
+            viz_type = 'bar'
+        elif any(word in question_lower for word in ['breakdown', 'distribution', 'pie']):
+            analysis_type = 'breakdown'
+            viz_type = 'pie'
+        elif any(word in question_lower for word in ['performance', 'metrics', 'kpi']):
+            analysis_type = 'performance'
+            viz_type = 'gauge'
+        else:
+            analysis_type = 'summary'
+            viz_type = 'bar'
+        
+        return {
+            "analysis_type": analysis_type,
+            "visualization_type": viz_type,
+            "primary_field": "status",
+            "secondary_field": None,
+            "grouping_strategy": "by_category",
+            "time_dimension": None,
+            "filters": {},
+            "metrics_to_calculate": ["count", "percentage"],
+            "confidence": 0.6,
+            "explanation": f"Basic {analysis_type} analysis",
+            "expected_insights": ["Basic data overview"]
+        }
+    
+    def _get_date_range(self, df: pd.DataFrame) -> str:
+        """Extract date range from dataframe"""
+        if 'created' in df.columns:
+            try:
+                dates = pd.to_datetime(df['created'], errors='coerce').dropna()
+                if len(dates) > 0:
+                    return f"{dates.min().strftime('%Y-%m-%d')} to {dates.max().strftime('%Y-%m-%d')}"
+            except:
+                pass
+        return "Unknown date range"
+    
+    def _calculate_key_metrics(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Calculate key metrics from the dataframe"""
+        metrics = {}
+        
+        try:
+            # Basic metrics
+            metrics['total_issues'] = len(df)
+            
+            # Status metrics
+            if 'status' in df.columns:
+                status_counts = df['status'].value_counts()
+                completed_statuses = ['Done', 'Resolved', 'Closed', 'Complete']
+                completed = sum(status_counts.get(status, 0) for status in completed_statuses)
+                metrics['completion_rate'] = round((completed / len(df)) * 100, 1) if len(df) > 0 else 0
+                metrics['status_distribution'] = status_counts.to_dict()
+            
+            # Team metrics
+            if 'assignee' in df.columns:
+                metrics['team_size'] = df['assignee'].nunique()
+                metrics['avg_issues_per_person'] = round(len(df) / df['assignee'].nunique(), 1) if df['assignee'].nunique() > 0 else 0
+            
+            # Priority metrics
+            if 'priority' in df.columns:
+                priority_counts = df['priority'].value_counts()
+                high_priority = sum(priority_counts.get(p, 0) for p in ['High', 'Critical', 'Urgent'])
+                metrics['high_priority_percentage'] = round((high_priority / len(df)) * 100, 1) if len(df) > 0 else 0
+            
+            # Time-based metrics
+            if 'created' in df.columns:
+                df['created_dt'] = pd.to_datetime(df['created'], errors='coerce')
+                valid_dates = df['created_dt'].dropna()
+                if len(valid_dates) > 0:
+                    metrics['date_span_days'] = (valid_dates.max() - valid_dates.min()).days
+                    metrics['avg_issues_per_day'] = round(len(valid_dates) / max(metrics['date_span_days'], 1), 2)
+            
+        except Exception as e:
+            metrics['calculation_error'] = str(e)
+        
+        return metrics
+
+class ClaudeJiraAnalyzer:
+    """Main analyzer class that combines Claude AI with data processing and visualization"""
+    
+    def __init__(self, claude_api_key: str = None):
+        """Initialize with optional Claude API key"""
+        self.claude_ai = ClaudeJiraAI(claude_api_key) if claude_api_key else None
+        self.has_ai = claude_api_key is not None
+        
+    def analyze_question(self, question: str, df: pd.DataFrame, chart_preference: str = "Auto") -> Tuple[Any, str, Dict[str, Any]]:
+        """Analyze question and generate visualization with intelligent insights"""
+        
+        # Prepare data context
+        data_context = self._prepare_data_context(df)
+        
+        if self.has_ai:
+            # Use Claude AI for intelligent analysis
+            intent = self.claude_ai.analyze_user_question(question, data_context)
+        else:
+            # Fallback to basic analysis
+            intent = self._basic_intent_analysis(question, chart_preference)
+        
+        # Override visualization type if user specified preference
+        if chart_preference != "Auto":
+            intent['visualization_type'] = chart_preference.lower().replace(' chart', '')
+        
+        # Generate visualization
+        chart = self._create_visualization(df, intent)
+        
+        # Generate analysis summary
+        if self.has_ai:
+            # Get AI-powered insights
+            analysis_results = {
+                'intent': intent,
+                'data_points': len(df),
+                'chart_created': chart is not None
+            }
+            
+            insights = self.claude_ai.generate_data_insights(analysis_results, data_context)
+            summary = self.claude_ai.create_intelligent_summary(df, intent['analysis_type'])
+            
+            # Combine insights and summary
+            response = f"{insights}\n\n**Technical Summary:**\n{summary}"
+        else:
+            # Basic summary
+            response = self._create_basic_summary(df, intent)
+        
+        return chart, response, intent
+    
+    def get_follow_up_suggestions(self, question: str, intent: Dict[str, Any], df: pd.DataFrame) -> List[str]:
+        """Get intelligent follow-up question suggestions"""
+        if self.has_ai:
+            return self.claude_ai.suggest_follow_up_questions(question, intent, list(df.columns))
+        else:
+            return self._basic_follow_up_questions(intent['analysis_type'])
+    
+    def explain_chart(self, question: str, chart_type: str, df: pd.DataFrame) -> str:
+        """Explain why a specific chart type was chosen"""
+        if self.has_ai:
+            data_context = self._prepare_data_context(df)
+            return self.claude_ai.explain_visualization_choice(question, chart_type, data_context)
+        else:
+            return f"Selected {chart_type} chart based on data characteristics and analysis requirements."
+    
+    def create_data_table(self, df: pd.DataFrame, intent: Dict[str, Any]) -> pd.DataFrame:
+        """Create a summarized data table based on analysis intent"""
+        
+        try:
+            primary_field = intent.get('primary_field', 'status')
+            secondary_field = intent.get('secondary_field')
+            
+            if primary_field in df.columns:
+                if secondary_field and secondary_field in df.columns:
+                    # Two-dimensional analysis
+                    summary_table = df.groupby([primary_field, secondary_field]).agg({
+                        'key': 'count',
+                        'priority': lambda x: (x.isin(['High', 'Critical'])).sum() if 'priority' in df.columns else 0
+                    }).rename(columns={'key': 'Count', 'priority': 'High Priority'})
+                    
+                    summary_table = summary_table.reset_index()
+                else:
+                    # Single dimension analysis
+                    summary_table = df[primary_field].value_counts().reset_index()
+                    summary_table.columns = [primary_field.title(), 'Count']
+                    
+                    # Add percentage
+                    summary_table['Percentage'] = (summary_table['Count'] / summary_table['Count'].sum() * 100).round(1)
+                
+                return summary_table
+            else:
+                # Fallback: basic summary
+                return df.describe(include='all').reset_index()
+                
+        except Exception as e:
+            st.error(f"Error creating data table: {str(e)}")
+            return pd.DataFrame({'Error': [str(e)]})
+    
+    def _prepare_data_context(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Prepare data context for Claude AI analysis"""
+        
+        context = {
+            'total_issues': len(df),
+            'fields': list(df.columns),
+            'date_range': self._get_date_range(df),
+            'projects': df['project'].unique().tolist() if 'project' in df.columns else [],
+            'team_size': df['assignee'].nunique() if 'assignee' in df.columns else 0
+        }
+        
+        # Add status summary
+        if 'status' in df.columns:
+            context['status_summary'] = df['status'].value_counts().to_dict()
+        
+        # Add priority summary
+        if 'priority' in df.columns:
+            context['priority_summary'] = df['priority'].value_counts().to_dict()
+        
+        return context
+    
+    def _create_visualization(self, df: pd.DataFrame, intent: Dict[str, Any]) -> Any:
+        """Create visualization based on analysis intent"""
+        
+        try:
+            primary_field = intent.get('primary_field', 'status')
+            viz_type = intent.get('visualization_type', 'bar')
+            
+            # Apply filters if specified
+            filtered_df = df.copy()
+            for field, value in intent.get('filters', {}).items():
+                if field in filtered_df.columns:
+                    if isinstance(value, list):
+                        filtered_df = filtered_df[filtered_df[field].isin(value)]
+                    else:
+                        filtered_df = filtered_df[filtered_df[field] == value]
+            
+            if len(filtered_df) == 0:
+                return None
+            
+            # Generate appropriate visualization
+            if primary_field in filtered_df.columns:
+                if viz_type == 'pie':
+                    counts = filtered_df[primary_field].value_counts()
+                    return px.pie(
+                        values=counts.values,
+                        names=counts.index,
+                        title=f"{primary_field.title()} Distribution"
+                    )
+                
+                elif viz_type == 'line' and intent.get('time_dimension'):
+                    # Time-based line chart
+                    if 'created' in filtered_df.columns:
+                        filtered_df['created_dt'] = pd.to_datetime(filtered_df['created'], errors='coerce')
+                        time_counts = filtered_df.groupby(filtered_df['created_dt'].dt.date).size()
+                        return px.line(
+                            x=time_counts.index,
+                            y=time_counts.values,
+                            title=f"{primary_field.title()} Trend Over Time",
+                            markers=True
+                        )
+                
+                elif viz_type == 'heatmap':
+                    # Create correlation heatmap for numerical data
+                    numeric_cols = filtered_df.select_dtypes(include=[np.number]).columns
+                    if len(numeric_cols) > 1:
+                        corr_matrix = filtered_df[numeric_cols].corr()
+                        return px.imshow(
+                            corr_matrix,
+                            title="Data Correlation Heatmap",
+                            color_continuous_scale='RdBu'
+                        )
+                
+                elif viz_type == 'sunburst':
+                    # Hierarchical sunburst chart
+                    counts = filtered_df[primary_field].value_counts()
+                    return px.sunburst(
+                        names=list(counts.index) + ['Total'],
+                        parents=['Total'] * len(counts) + [''],
+                        values=list(counts.values) + [counts.sum()],
+                        title=f"{primary_field.title()} Hierarchy"
+                    )
+                
+                elif viz_type == 'treemap':
+                    # Treemap visualization
+                    counts = filtered_df[primary_field].value_counts()
+                    return px.treemap(
+                        names=counts.index,
+                        values=counts.values,
+                        title=f"{primary_field.title()} Treemap"
+                    )
+                
+                elif viz_type == 'scatter':
+                    # Scatter plot (requires numerical data)
+                    numeric_cols = filtered_df.select_dtypes(include=[np.number]).columns
+                    if len(numeric_cols) >= 2:
+                        return px.scatter(
+                            filtered_df,
+                            x=numeric_cols[0],
+                            y=numeric_cols[1],
+                            color=primary_field if primary_field in filtered_df.columns else None,
+                            title=f"Scatter Plot: {numeric_cols[0]} vs {numeric_cols[1]}"
+                        )
+                
+                elif viz_type == 'table':
+                    # Return None to indicate table should be shown instead of chart
+                    return None
+                
+                else:
+                    # Default bar chart
+                    counts = filtered_df[primary_field].value_counts()
+                    return px.bar(
+                        x=counts.index,
+                        y=counts.values,
+                        title=f"{primary_field.title()} Analysis",
+                        labels={'x': primary_field.title(), 'y': 'Count'}
+                    )
+            
+            return None
+            
+        except Exception as e:
+            st.error(f"Visualization error: {str(e)}")
+            return None
+    
+    def _basic_intent_analysis(self, question: str, chart_preference: str) -> Dict[str, Any]:
+        """Basic intent analysis when Claude AI is not available"""
+        question_lower = question.lower()
+        
+        # Determine analysis type
+        if 'trend' in question_lower or 'over time' in question_lower:
+            analysis_type = 'trend'
+            viz_type = 'line'
+        elif 'compare' in question_lower:
+            analysis_type = 'comparison'
+            viz_type = 'bar'
+        elif 'breakdown' in question_lower or 'distribution' in question_lower or 'pie' in question_lower:
+            analysis_type = 'breakdown'
+            viz_type = 'pie'
+        else:
+            analysis_type = 'summary'
+            viz_type = 'bar'
+        
+        # Override with user preference
+        if chart_preference != "Auto":
+            viz_type = chart_preference.lower().replace(' chart', '')
+        
+        return {
+            'analysis_type': analysis_type,
+            'visualization_type': viz_type,
+            'primary_field': 'status',
+            'secondary_field': None,
+            'grouping_strategy': 'by_category',
+            'time_dimension': 'trend' in analysis_type,
+            'filters': {},
+            'metrics_to_calculate': ['count'],
+            'confidence': 0.7,
+            'explanation': f'Basic {analysis_type} analysis',
+            'expected_insights': ['Data overview']
+        }
+    
+    def _create_basic_summary(self, df: pd.DataFrame, intent: Dict[str, Any]) -> str:
+        """Create basic summary when Claude AI is not available"""
+        primary_field = intent.get('primary_field', 'status')
+        analysis_type = intent.get('analysis_type', 'summary')
+        
+        summary = f"**{analysis_type.title()} Analysis:**\n\n"
+        summary += f"• Total records analyzed: {len(df)}\n"
+        
+        if primary_field in df.columns:
+            value_counts = df[primary_field].value_counts()
+            summary += f"• {primary_field.title()} categories: {len(value_counts)}\n"
+            summary += f"• Top category: {value_counts.index[0]} ({value_counts.iloc[0]} items)\n"
+        
+        return summary
+    
+    def _basic_follow_up_questions(self, analysis_type: str) -> List[str]:
+        """Generate basic follow-up questions"""
+        base_questions = {
+            'summary': [
+                "Show me team performance breakdown",
+                "What's our completion rate?",
+                "How are priorities distributed?",
+                "Show me trends over time"
+            ],
+            'trend': [
+                "What caused the peaks in activity?",
+                "How does this compare to last month?",
+                "Show me breakdown by team member",
+                "What's the velocity trend?"
+            ],
+            'comparison': [
+                "Which team member needs support?",
+                "What's causing the differences?",
+                "Show me performance over time",
+                "How can we balance the workload?"
+            ],
+            'breakdown': [
+                "What's driving the largest category?",
+                "How has this changed over time?",
+                "Show me by priority level",
+                "What are the quality metrics?"
+            ]
+        }
+        
+        return base_questions.get(analysis_type, base_questions['summary'])
+    
+    def _get_date_range(self, df: pd.DataFrame) -> str:
+        """Get date range from dataframe"""
+        if 'created' in df.columns:
+            try:
+                dates = pd.to_datetime(df['created'], errors='coerce').dropna()
+                if len(dates) > 0:
+                    return f"{dates.min().strftime('%Y-%m-%d')} to {dates.max().strftime('%Y-%m-%d')}"
+            except:
+                pass
+        return "Unknown"
+
+def enhance_dataframe_for_ai(df: pd.DataFrame) -> pd.DataFrame:
+    """Enhance dataframe with calculated fields for better AI analysis"""
+    
+    try:
+        # Handle datetime conversion robustly
+        if 'created' in df.columns:
+            df['created_dt'] = pd.to_datetime(df['created'], errors='coerce', utc=True)
+            valid_dates = df['created_dt'].notna()
+            if valid_dates.any():
+                df.loc[valid_dates, 'created_date'] = df.loc[valid_dates, 'created_dt'].dt.date
+                df.loc[valid_dates, 'created_month'] = df.loc[valid_dates, 'created_dt'].dt.to_period('M')
+                df.loc[valid_dates, 'created_year'] = df.loc[valid_dates, 'created_dt'].dt.year
+                df.loc[valid_dates, 'created_week'] = df.loc[valid_dates, 'created_dt'].dt.isocalendar().week
+                df.loc[valid_dates, 'created_quarter'] = df.loc[valid_dates, 'created_dt'].dt.quarter
+        
+        # Handle resolution dates
+        if 'resolutiondate' in df.columns:
+            df['resolved_dt'] = pd.to_datetime(df['resolutiondate'], errors='coerce', utc=True)
+            
+            # Calculate resolution times
+            if 'created_dt' in df.columns:
+                valid_resolution = df['resolved_dt'].notna() & df['created_dt'].notna()
+                if valid_resolution.any():
+                    df.loc[valid_resolution, 'resolution_days'] = (
+                        df.loc[valid_resolution, 'resolved_dt'] - df.loc[valid_resolution, 'created_dt']
+                    ).dt.days
+        
+        # Age calculation
+        if 'created_dt' in df.columns:
+            valid_created = df['created_dt'].notna()
+            if valid_created.any():
+                df.loc[valid_created, 'age_days'] = (
+                    pd.Timestamp.now(tz='UTC') - df.loc[valid_created, 'created_dt']
+                ).dt.days
+        
+        # Clean up assignee field
+        if 'assignee' in df.columns:
+            df['assignee'] = df['assignee'].fillna('Unassigned')
+        
+        # Clean up priority field
+        if 'priority' in df.columns:
+            df['priority'] = df['priority'].fillna('None')
+        
+        return df
+        
+    except Exception as e:
+        st.warning(f"Data enhancement warning: {str(e)}")
+        return df
+
+def setup_claude_integration() -> str:
+    """Setup Claude API integration in Streamlit sidebar"""
+    
+    with st.sidebar:
+        st.subheader("🧠 JirAI Integration")
+        
+        # API Key input
+        claude_api_key = st.text_input(
+            "AI API Key",
+            type="password",
+            help="Enter your AI API key for enhanced AI capabilities"
+        )
+        
+        if claude_api_key:
+            # Test the API key
+            try:
+                client = anthropic.Anthropic(api_key=claude_api_key)
+                # Simple test call
+                test_response = client.messages.create(
+                    model="claude-3-5-sonnet-20241022",
+                    max_tokens=10,
+                    messages=[{"role": "user", "content": "Hi"}]
+                )
+                st.success("✅ AI connected!")
+                st.session_state.claude_api_key = claude_api_key
+                return claude_api_key
+            except Exception as e:
+                st.error(f"❌ AI API error: {str(e)}")
+                return None
+
+def process_claude_question(question: str, chart_preference: str = "Auto"):
+    """Process question using Claude AI-enhanced analysis"""
+    
+    if 'issues_df' not in st.session_state.jira_data:
+        st.error("Please fetch Jira data first to use the AI assistant.")
+        return
+    
+    df = st.session_state.jira_data['issues_df'].copy()
+    
+    # Get Claude API key
+    claude_api_key = st.session_state.get('claude_api_key', None)
+    
+    # Initialize Claude analyzer
+    analyzer = ClaudeJiraAnalyzer(claude_api_key)
+    
+    # Enhance dataframe
+    df = enhance_dataframe_for_ai(df)
+    
+    try:
+        with st.spinner("🧠 JirAI is analyzing your data..."):
+            # Analyze question and generate visualization
+            chart, response, intent = analyzer.analyze_question(question, df, chart_preference)
+            
+            # Create data table if requested or if no chart was generated
+            if intent.get('visualization_type') == 'table' or chart is None:
+                data_table = analyzer.create_data_table(df, intent)
+                st.session_state.last_data_table = data_table
+            
+            # Get follow-up suggestions
+            followup_questions = analyzer.get_follow_up_suggestions(question, intent, df)
+            
+            # Get chart explanation
+            if chart is not None:
+                chart_explanation = analyzer.explain_chart(question, intent.get('visualization_type', 'chart'), df)
+                response += f"\n\n**📊 Chart Selection:**\n{chart_explanation}"
+        
+        # Add confidence indicator
+        confidence = intent.get('confidence', 0.5)
+        if analyzer.has_ai:
+            if confidence > 0.8:
+                confidence_indicator = "🎯 High Confidence (AI Enhanced)"
+            elif confidence > 0.6:
+                confidence_indicator = "🤖 Medium Confidence (AI Enhanced)"
+            else:
+                confidence_indicator = "🔄 Learning (AI Active)"
+        else:
+            confidence_indicator = "🔧 Basic Analysis Mode"
+        
+        enhanced_response = f"{confidence_indicator}\n\n{response}"
+        
+        # Add follow-up suggestions
+        if followup_questions:
+            enhanced_response += f"\n\n**💡 Suggested Follow-up Questions:**\n"
+            for i, q in enumerate(followup_questions[:3], 1):
+                enhanced_response += f"{i}. {q}\n"
+        
+        # Store results
+        st.session_state.chat_history.append((question, enhanced_response, chart))
+        st.session_state.followup_questions = followup_questions
+        st.session_state.last_intent = intent
+        
+        st.rerun()
+        
+    except Exception as e:
+        error_response = f"Analysis error: {str(e)}\n\nPlease try rephrasing your question or check your data."
+        st.session_state.chat_history.append((question, error_response, None))
+        st.rerun()
+
+def display_claude_enhanced_chat():
+    """Display Claude AI-enhanced chat interface"""
+    
+    st.header("🤖 JirAI Assistant")
+    st.write("Ask intelligent questions about your Jira data and get AI-powered insights with visualizations")
+    
+    # Setup Claude integration
+    claude_api_key = setup_claude_integration()
+    
+    # Initialize session state
+    if 'chat_history' not in st.session_state:
+        st.session_state.chat_history = []
+    if 'followup_questions' not in st.session_state:
+        st.session_state.followup_questions = []
+    if 'last_data_table' not in st.session_state:
+        st.session_state.last_data_table = None
+    
+    # Check if data is available
+    if 'issues_df' in st.session_state.jira_data:
+        data_info = st.session_state.jira_data['issues_df']
+        
+        # Display AI capabilities
+        if claude_api_key:
+            st.success("🧠 **AI Enhanced Mode** - Advanced natural language understanding active!")
+            with st.expander("🚀 AI Capabilities"):
+                st.markdown("""
+                **🎯 Advanced Analysis:**
+                - Natural language question understanding
+                - Intelligent insight generation
+                - Context-aware recommendations
+                - Automated pattern detection
+                
+                **📊 Smart Visualizations:**
+                - Optimal chart type selection
+                - Multi-dimensional analysis
+                - Interactive data exploration
+                - Explanation of chart choices
+                
+                **💡 Proactive Insights:**
+                - Performance optimization suggestions
+                - Risk identification
+                - Process improvement recommendations
+                - Follow-up question generation
+                """)
+        else:
+            st.info("🔧 **Basic Mode** - Add Claude API key for enhanced intelligence")
+        
+        # Quick data overview
+        with st.expander("📊 Data Overview"):
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Issues", len(data_info))
+            with col2:
+                projects = data_info['project'].nunique() if 'project' in data_info.columns else 0
+                st.metric("Projects", projects)
+            with col3:
+                assignees = data_info['assignee'].nunique() if 'assignee' in data_info.columns else 0
+                st.metric("Team Members", assignees)
+            with col4:
+                if 'status' in data_info.columns:
+                    completed = len(data_info[data_info['status'].isin(['Done', 'Resolved', 'Closed'])])
+                    completion_rate = (completed / len(data_info) * 100) if len(data_info) > 0 else 0
+                    st.metric("Completion Rate", f"{completion_rate:.1f}%")
+        
+        # Chat interface
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            user_question = st.text_input(
+                "Ask JirAI about your Jira data:",
+                placeholder="e.g., What insights can you provide about our team's performance and what should we improve?",
+                key="claude_question_input"
+            )
+        
+        with col2:
+            chart_preference = st.selectbox(
+                "Visualization",
+                ["Auto", "Bar Chart", "Line Chart", "Pie Chart", "Scatter Plot", 
+                 "Heatmap", "Sunburst", "Treemap", "Table", "Funnel"],
+                help="Claude will intelligently choose the best visualization"
+            )
+        
+        # Action buttons
+        col1, col2, col3 = st.columns([1, 1, 2])
+        
+        with col1:
+            if st.button("🚀 Ask JirAI", type="primary"):
+                if user_question:
+                    process_claude_question(user_question, chart_preference)
+                else:
+                    st.warning("Please enter a question!")
+        
+        with col2:
+            if st.button("🗑️ Clear Chat"):
+                st.session_state.chat_history = []
+                st.session_state.followup_questions = []
+                st.session_state.last_data_table = None
+                st.rerun()
+        
+        # Follow-up questions
+        if st.session_state.followup_questions:
+            st.subheader("💡 Suggested Next Questions")
+            cols = st.columns(min(3, len(st.session_state.followup_questions)))
+            for i, question in enumerate(st.session_state.followup_questions[:3]):
+                with cols[i]:
+                    if st.button(f"💭 {question[:40]}...", key=f"followup_{i}", help=question):
+                        process_claude_question(question, "Auto")
+        
+        # Display data table if available
+        if st.session_state.last_data_table is not None:
+            st.subheader("📊 Data Summary Table")
+            st.dataframe(st.session_state.last_data_table, use_container_width=True, hide_index=True)
+        
+        # Chat history
+        if st.session_state.chat_history:
+            st.markdown("---")
+            st.subheader("💬 Conversation History")
+            
+            for i, (question, response, chart) in enumerate(reversed(st.session_state.chat_history)):
+                with st.container():
+                    # Question
+                    st.markdown(f"**🧑 You:** {question}")
+                    
+                    # Response
+                    st.markdown(f"**🤖 JirAI:**")
+                    st.markdown(response)
+                    
+                    # Chart if available
+                    if chart is not None:
+                        try:
+                            st.plotly_chart(chart, use_container_width=True, key=f"JiraAI_chart_{i}")
+                        except Exception as e:
+                            st.error(f"Visualization error: {str(e)}")
+                    
+                    if i < len(st.session_state.chat_history) - 1:
+                        st.markdown("---")
+        
+        # Quick actions
+        st.markdown("---")
+        st.subheader("⚡ Quick Analysis")
+        
+        quick_actions = [
+            ("📊 Overall Health", "Analyze our project's overall health and provide insights on what we're doing well and what needs improvement"),
+            ("👥 Team Performance", "Compare team member performance and suggest ways to optimize workload distribution"),
+            ("🔍 Bottleneck Analysis", "Identify bottlenecks in our workflow and suggest process improvements"),
+            ("📈 Trend Analysis", "Show me trends over time and predict future patterns"),
+            ("🎯 Priority Focus", "Analyze our priority distribution and suggest focus areas for maximum impact")
+        ]
+        
+        cols = st.columns(len(quick_actions))
+        for i, (label, question) in enumerate(quick_actions):
+            with cols[i]:
+                if st.button(label, key=f"quick_claude_{i}", help=question):
+                    process_claude_question(question, "Auto")
+    
+    else:
+        st.warning("Please fetch Jira data first to start using AI assistant.")
+        st.info("Configure your Jira connection in the sidebar to get started.")
+
+# INTEGRATION FUNCTIONS FOR MAIN APPLICATION
+
+def display_enhanced_ai_chat_tab():
+    """Main function to display the enhanced AI chat tab - Use this in your main tabs"""
+    display_claude_enhanced_chat()
+    
 
 def main():
     st.markdown('<h1 class="main-header">🤖 AI Jira Reporting Agent</h1>', unsafe_allow_html=True)
@@ -1399,7 +1646,7 @@ def main():
                         issues_df = pd.DataFrame(issues_data)
                         st.session_state.jira_data['issues_df'] = issues_df
                         
-                        # Fetch worklogs for ALL issues (with reasonable limit)
+                        #Fetch worklogs for ALL issues (with reasonable limit)
                         #st.info(f"Fetching worklogs for {len(all_issue_keys)} issues...")
                         
                         # Limit worklog fetching to prevent timeout (adjust as needed)
@@ -1409,15 +1656,15 @@ def main():
                         #worklogs = jira_api.get_worklogs(limited_issue_keys)
                         
                         #if worklogs:
-                            #worklogs_df = pd.DataFrame(worklogs)
-                            #st.session_state.jira_data['worklogs_df'] = worklogs_df
-                            #st.success(f"✅ Fetched {len(issues)} issues and {len(worklogs)} worklogs from {len(config.projects)} projects")
+                        #    worklogs_df = pd.DataFrame(worklogs)
+                        #    st.session_state.jira_data['worklogs_df'] = worklogs_df
+                        #    st.success(f"✅ Fetched {len(issues)} issues and {len(worklogs)} worklogs from {len(config.projects)} projects")
                         #else:
-                            #st.warning(f"✅ Fetched {len(issues)} issues but no worklogs found")
+                        #    st.warning(f"✅ Fetched {len(issues)} issues but no worklogs found")
                         
-                        st.rerun()
-                    else:
-                        st.warning("No issues found in the specified date range")
+                        #st.rerun()
+                    #else:
+                        #st.warning("No issues found in the specified date range")
             else:
                 st.warning("Please configure Jira settings and select projects first.")
                 
@@ -1442,89 +1689,15 @@ def main():
     with tab5:
         display_prodOps_analysis()
     #AI Chat Tab
-    # with tab6:
-    #     st.header("AI Chat Assistant")
-    #     st.write("Ask questions about your Jira data and get insights with visualizations")
+    #with tab6:
+        #display_enhanced_ai_chat_tab()
+
         
-    #     # Initialize chat history
-    #     if 'chat_history' not in st.session_state:
-    #         st.session_state.chat_history = []
-        
-    #     # Chat interface
-    #     if 'issues_df' in st.session_state.jira_data:
-    #         # Enhanced AI features section
-    #         col1 = st.columns(1)[0]
-            
-    #         with col1:
-    #             st.info("🧠 **Enhanced AI Intelligence**")
-    #             with st.expander("View AI Capabilities"):
-    #                 st.markdown("""
-    #                 **🔍 Root Cause Analysis:**
-    #                 - "Perform root cause analysis on failed issues"
-    #                 - "Find root causes for blocked tasks"
-    #                 - "Analyze problems in [specific component]"
-                    
-    #                 **🔗 Similar Issue Detection:**
-    #                 - "Find issues similar to [ISSUE-KEY]"
-    #                 - "Show me all issues related to authentication errors"
-    #                 - "Group similar bugs together"
-                    
-    #                 **📊 Advanced Analytics:**
-    #                 - "Show workload trends for all projects"
-    #                 - "Compare team performance across projects"
-    #                 - "Analyze resolution patterns for bugs"
-                    
-    #                 **🎯 Intelligent Filtering:**
-    #                 - "Show high priority bugs assigned to John"
-    #                 - "Analyze completed issues from last month"
-    #                 - "Compare this sprint vs last sprint"
-                    
-    #                 **📈 Predictive Insights:**
-    #                 - "When will the backlog be completed?"
-    #                 - "Predict next month's workload"
-    #                 - "Estimate time to resolve open bugs"
-    #                 """)
-            
-    #         # Chat input section
-    #         col1, col2 = st.columns([3, 1])
-            
-    #         with col1:
-    #             user_question = st.text_input(
-    #                 "Ask about your Jira data:",
-    #                 placeholder="e.g., Show me a bar chart of monthly workloads for all projects"
-    #             )
-            
-    #         with col2:
-    #             chart_preference = st.selectbox(
-    #                 "Preferred Chart",
-    #                 ["Auto", "Bar Chart", "Line Chart", "Pie Chart", "Scatter Plot", "Histogram", "Sunburst", "Treemap", "Funnel", "Heatmap"],
-    #                 help="Select preferred chart type (AI will adapt based on data)"
-    #             )
-            
-    #         col1, col2 = st.columns([1, 4])
-    #         with col1:
-    #             if st.button("🚀 Ask AI"):
-    #                 if user_question:
-    #                     # Fixed: Pass chart_preference as part of the processing
-    #                     process_ai_chat_question(user_question, chart_preference)
-            
-    #         with col2:
-    #             if st.button("🗑️ Clear Chat"):
-    #                 st.session_state.chat_history = []
-    #                 st.rerun()
-            
-    #         # Display chat history
-    #         if st.session_state.chat_history:
-    #             st.subheader("Chat History")
-        
-    #     else:
-    #         st.info("Please fetch Jira data first to start chatting with the AI assistant.")
-    
 def display_project_dashboard(df, project_name):
     """Display dashboard for a specific project"""
     try:
         # Enhanced AI Agent for insights
-        ai_agent = EnhancedAIAgent()
+        ai_agent = ClaudeJiraAI()
         
         # Generate AI insights for the dashboard
         insights = ai_agent.generate_insights({'issues_df': df}, f"dashboard overview for {project_name}")
@@ -1643,7 +1816,7 @@ def process_ai_chat_question(question: str, chart_preference: str = "Auto"):
         return
     
     df = st.session_state.jira_data['issues_df'].copy()
-    ai_agent = EnhancedAIAgent()
+    ai_agent = ClaudeJiraAI()
     
     # Prepare enhanced dataset
     df = enhance_dataframe(df)
@@ -2203,102 +2376,7 @@ def analyze_worklog_intelligence(df, question, entities):
         
     except Exception as e:
         return None, f"Worklog analysis error: {str(e)}"
-
-def create_pdf_report(title, content, charts=None):
-    """Create PDF report from analysis results"""
-    if not PDF_AVAILABLE:
-        st.error("PDF generation not available. Please install reportlab: pip install reportlab")
-        return None
-    
-    try:
-        buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=18)
-        styles = getSampleStyleSheet()
-        story = []
-        
-        # Title
-        title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
-            fontSize=20,
-            spaceAfter=30,
-            textColor=colors.HexColor('#1f77b4'),
-            alignment=1  # Center alignment
-        )
-        story.append(Paragraph(title, title_style))
-        story.append(Spacer(1, 20))
-        
-        # Content - clean the content for PDF
-        content_clean = content.replace('\n', '<br/>')
-        content_clean = content_clean.replace('**', '<b>').replace('**', '</b>')
-        
-        content_style = ParagraphStyle(
-            'CustomContent',
-            parent=styles['Normal'],
-            fontSize=12,
-            spaceAfter=12,
-            leading=16
-        )
-        story.append(Paragraph(content_clean, content_style))
-        story.append(Spacer(1, 20))
-        
-        # Add charts if provided
-        if charts:
-            for i, chart in enumerate(charts):
-                if chart is not None:
-                    try:
-                        # Convert plotly chart to image
-                        img_bytes = pio.to_image(chart, format="png", width=800, height=500, scale=2)
-                        
-                        # Create image for PDF
-                        img = Image(io.BytesIO(img_bytes))
-                        img.drawWidth = 6*inch
-                        img.drawHeight = 4*inch
-                        
-                        story.append(img)
-                        story.append(Spacer(1, 15))
-                        
-                    except Exception as e:
-                        # If chart conversion fails, add a placeholder
-                        error_text = f"Chart {i+1}: Unable to render visualization ({str(e)})"
-                        story.append(Paragraph(error_text, styles['Italic']))
-                        story.append(Spacer(1, 12))
-        
-        # Add metadata section
-        story.append(Spacer(1, 30))
-        
-        # Add a line separator
-        line_style = ParagraphStyle(
-            'Line',
-            parent=styles['Normal'],
-            fontSize=12,
-            textColor=colors.grey
-        )
-        story.append(Paragraph('_' * 80, line_style))
-        story.append(Spacer(1, 10))
-        
-        # Add timestamp and metadata
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        meta_style = ParagraphStyle(
-            'Metadata',
-            parent=styles['Normal'],
-            fontSize=10,
-            textColor=colors.grey,
-            alignment=1  # Center alignment
-        )
-        
-        story.append(Paragraph(f"Generated on: {timestamp}", meta_style))
-        story.append(Paragraph("AI Jira Reporting Agent", meta_style))
-        
-        # Build the PDF
-        doc.build(story)
-        buffer.seek(0)
-        return buffer.getvalue()
-        
-    except Exception as e:
-        st.error(f"PDF generation error: {str(e)}")
-        return None
-    
+      
 def format_period_labels(period_series, time_period):
     """Format period labels with full month names and proper formatting"""
     try:
@@ -2819,62 +2897,35 @@ def prediction_intelligence(df, question, entities):
     except Exception as e:
         return None, f"Prediction error: {str(e)}"
     
-def smart_general_analysis(df, question, entities=None):
-    """Smart general analysis that adapts to available data"""
+def smart_general_analysis(df, question, chart_preference="Auto", entities=None):
+    """Replacement for the problematic smart_general_analysis function"""
     try:
-        # Determine best analysis based on available data and question context
-        question_lower = question.lower()
-        
-        # Check if filtering was applied
-        filter_info = ""
-        if entities and entities.get('filters'):
-            filters = entities['filters']
-            filter_parts = []
-            for key, value in filters.items():
-                if isinstance(value, list):
-                    filter_parts.append(f"{key}: {', '.join(value)}")
-                else:
-                    filter_parts.append(f"{key}: {value}")
-            if filter_parts:
-                filter_info = f" (Filtered by: {', '.join(filter_parts)})"
-        
-        if 'priority' in df.columns and any(word in question_lower for word in ['priority', 'urgent', 'important']):
-            priority_counts = df['priority'].value_counts()
-            fig = px.sunburst(
-                names=list(priority_counts.index) + ['All Issues'],
-                parents=['All Issues'] * len(priority_counts) + [''],
-                values=list(priority_counts.values) + [priority_counts.sum()],
-                title=f"Priority Distribution Analysis{filter_info}"
-            )
-            high_critical = priority_counts.get('High', 0) + priority_counts.get('Critical', 0)
-            response = f"Priority breakdown: {dict(priority_counts)}. Critical/High priority represents {(high_critical / len(df) * 100):.1f}% of workload."
-            
-        elif 'status' in df.columns:
+        # Simple fallback analysis
+        if 'status' in df.columns:
             status_counts = df['status'].value_counts()
-            completion_statuses = ['Done', 'Resolved', 'Closed', 'Complete']
-            completed = sum(status_counts.get(status, 0) for status in completion_statuses)
-            completion_rate = (completed / len(df) * 100) if len(df) > 0 else 0
             
-            colors_map = ['#2E8B57' if status in completion_statuses else '#FF6B6B' for status in status_counts.index]
-            fig = px.bar(x=status_counts.index, y=status_counts.values, color=status_counts.index,
-                        color_discrete_sequence=colors_map, title=f"Project Status Overview - {completion_rate:.1f}% Complete{filter_info}")
+            if chart_preference.lower() == 'pie':
+                fig = px.pie(
+                    values=status_counts.values,
+                    names=status_counts.index,
+                    title="Data Overview"
+                )
+            else:
+                fig = px.bar(
+                    x=status_counts.index,
+                    y=status_counts.values,
+                    title="Data Overview",
+                    labels={'x': 'Status', 'y': 'Count'}
+                )
             
-            response = f"Status analysis: {completion_rate:.1f}% completion rate ({completed}/{len(df)} issues). "
-            response += f"Active work: {len(df) - completed} issues remaining. "
-            
-        else:
-            # Fallback to basic summary
-            fig = px.histogram(df, x='assignee' if 'assignee' in df.columns else df.columns[0], 
-                             title=f"Data Overview{filter_info}")
-            response = f"Data summary: {len(df)} total records analyzed across {df.shape[1]} attributes. "
-            
-        if filter_info:
-            response += f" Analysis applied to filtered dataset{filter_info}."
-            
-        return fig, response
+            response = f"Analysis: {len(df)} total issues across {len(status_counts)} status categories."
+            return fig, response
+        
+        # Fallback for data without status
+        return None, "Data overview: Please use the enhanced AI features for better analysis."
         
     except Exception as e:
-        return None, f"General analysis error: {str(e)}"
+        return None, f"Analysis unavailable: {str(e)}"
     
 def enhance_dataframe(df):
     """Enhance dataframe with calculated fields"""
@@ -3198,7 +3249,7 @@ def check_delayed_deliveries(df, end_date):
                     (delayedDeliveries['closed_date'] == '')
                 )
             ]
-
+            # FIX    the issue with any delivery the includes the work upstream
             # Calculate DelayDays
             delay_closed = (delayedDeliveries['closed_date'] - delayedDeliveries['due_date']).dt.days
             delay_noClosed = pd.Series(end_date - delayedDeliveries['due_date']).dt.days
