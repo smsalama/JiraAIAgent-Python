@@ -1667,7 +1667,7 @@ def main():
                 st.warning("Please configure Jira settings and select projects first.")
                 
     # Main content area - Updated tabs
-    tab1,tab2,tab3,tab4,tab5 = st.tabs(["✔️ Sanity Check", "📈 Operations Report", "🛠️ Support Report", "🔍Cause Code Analysis", "🧑‍💻 ProdOps Report"])
+    tab1,tab2,tab3,tab4,tab5, tab6 = st.tabs(["✔️ Sanity Check", "📈 Operations Report", "🛠️ Support Report", "🔍Cause Code Analysis", "🧑‍💻 ProdOps Report", "💬 AI Chat"])
     #"💬 AI Chat"
     #Sanity Check Tab
     with tab1:
@@ -1687,8 +1687,8 @@ def main():
     with tab5:
         display_prodOps_analysis()
     #AI Chat Tab
-    #with tab6:
-        #display_enhanced_ai_chat_tab()
+    with tab6:
+        display_enhanced_ai_chat_tab()
 
         
 def display_project_dashboard(df, project_name):
@@ -4401,6 +4401,7 @@ def filter_hdeps_support_stories(df):
     
     start_date = pd.to_datetime(st.session_state.get('start_date', datetime.now()),utc=True)
     end_date = pd.to_datetime(st.session_state.get('end_date', datetime.now()),utc=True)
+    end_date = end_date.replace(hour=23, minute=59, second=59)
     #thismonthstartdate = end_date.replace(day=1).strftime('%Y-%m-%d')
     
     # Filter by project name
@@ -4449,7 +4450,7 @@ def create_support_overview(df, start_date, end_date):
     
     # Prepare data
     df = filter_hdeps_support_stories(df)
-    
+
     df = prepare_support_data(df)
     
     #working until here.
@@ -4537,6 +4538,7 @@ def create_resolved_items_chart(df, start_date, end_date, colors):
     
     # Filter out post-incidents
     df_filtered = df[~df['issuetype'].str.contains('Post', case=False, na=False)]
+
     
     # Get months
     months = pd.date_range(start=start_date, end=end_date, freq='ME').strftime('%B').tolist()
@@ -5962,6 +5964,8 @@ def filter_hdeps_incidents_for_cause_analysis(df, start_date, end_date):
     
     # Filter by HDEPS key
     filtered_df = df[df['key'].str.contains('HDEPS', na=False)].copy()
+    
+    end_date = end_date.replace(hour=23, minute=59, second=59)
     
     # Convert resolution date
     filtered_df['resolutiondate'] = pd.to_datetime(filtered_df['resolutiondate'], errors='coerce', utc=True)
