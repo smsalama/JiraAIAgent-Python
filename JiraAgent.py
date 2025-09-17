@@ -6,13 +6,11 @@ from datetime import datetime, timedelta
 import requests
 from requests.auth import HTTPBasicAuth
 import json
-import base64
 import io
 import re
 from typing import Dict, List, Optional, Any, Tuple, Union
 import time
 from dataclasses import dataclass
-import hashlib
 import warnings
 from reportlab.lib.pagesizes import letter, A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle
@@ -25,6 +23,23 @@ import ast
 from docx import Document
 import re
 import anthropic
+import time
+import requests
+from collections import defaultdict
+from datetime import datetime
+import concurrent.futures
+import threading
+from datetime import datetime, timezone, date
+import dateutil.parser
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+import json
+import json
+import csv
+import os
+        
+        
+        
 
 # Suppress SSL warnings
 warnings.filterwarnings('ignore', message='urllib3 v2 only supports OpenSSL')
@@ -217,77 +232,958 @@ class JiraAPI:
         return issues
     
     def get_issues_with_expanded_fields(self, project_keys: List[str], start_date: str, end_date: str) -> List[Dict]:
-        """Get issues with expanded fields including parent/epic information"""
-        issues = []
+    
+        start_time = time.time()
+        all_issues = []
+        issues_lock = threading.Lock()
+        total_fetched = 0
         
-        for project_key in project_keys:
-            jql = f"project = {project_key}"
-            #AND duedate >= '{start_date}' AND duedate <= '{end_date}'
-            start_at = 0
-            max_results = 100
+        def create_optimized_session():
+            """Create optimized session with conservative settings"""
+            session = requests.Session()
+            session.auth = self.auth
+            session.headers.update({
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Connection": "keep-alive"
+            })
             
-            while True:
+            # Conservative retry strategy
+            retry_strategy = Retry(
+                total=3,
+                backoff_factor=1.0,
+                status_forcelist=[429, 500, 502, 503, 504],
+            )
+            
+            adapter = HTTPAdapter(
+                max_retries=retry_strategy,
+                pool_connections=10,
+                pool_maxsize=20
+            )
+            session.mount("http://", adapter)
+            session.mount("https://", adapter)
+            
+            return session
+        
+        def log_progress(project_key, fetched_count):
+            """Thread-safe progress logging"""
+            nonlocal total_fetched
+            with issues_lock:
+                total_fetched += fetched_count
+                elapsed = time.time() - start_time
+                rate = total_fetched / elapsed if elapsed > 0 else 0
+                print(f"[{elapsed:.1f}s] {project_key}: +{fetched_count} | Total: {total_fetched} ({rate:.1f}/sec)")
+        
+        def fetch_project_issues_optimized(project_key):
+            """Fetch all issues for a project with optimized approach"""
+            session = create_optimized_session()
+            project_issues = []
+            
+            try:
+                # Simple JQL query without date filtering - get ALL issues
+                jql = f"project = {project_key}"
+                print(f"🔍 {project_key}: JQL = {jql}")
+                
+                # Step 1: Get first page using token-based pagination
+                initial_response = session.get(
+                    f"{self.base_url}/rest/api/3/search/jql",
+                    params={
+                        "jql": jql,
+                        "maxResults": 500,
+                        "expand": "names,schema,changelog,renderedFields",
+                        "fields": "*all"
+                    },
+                    timeout=30
+                )
+                
+                if initial_response.status_code != 200:
+                    print(f"❌ {project_key}: HTTP {initial_response.status_code}")
+                    print(f"❌ {project_key}: Response = {initial_response.text[:200]}...")
+                    return project_key, []
+                
+                initial_data = initial_response.json()
+                print(f"🔍 {project_key}: Response keys = {list(initial_data.keys())}")
+                
+                # Handle different response formats
+                first_batch = []
+                if 'issues' in initial_data:
+                    first_batch = initial_data.get('issues', [])
+                elif 'values' in initial_data:
+                    first_batch = initial_data.get('values', [])
+                elif 'results' in initial_data:
+                    first_batch = initial_data.get('results', [])
+                
+                print(f"📊 {project_key}: First batch = {len(first_batch)} issues")
+                
+                if len(first_batch) == 0:
+                    print(f"🔍 {project_key}: Full response = {initial_data}")
+                    print(f"❌ {project_key}: No issues found - project may not exist or no access")
+                    return project_key, []
+                
+                project_issues.extend(first_batch)
+                log_progress(project_key, len(first_batch))
+                
+                # Step 2: Check for more pages using token pagination
+                is_last = initial_data.get('isLast', True)
+                next_page_token = initial_data.get('nextPageToken')
+                
+                if not is_last and next_page_token:
+                    print(f"🔄 {project_key}: More pages detected, using token pagination")
+                    additional_issues = fetch_with_token_pagination(session, jql, project_key, next_page_token)
+                    project_issues.extend(additional_issues)
+                    log_progress(project_key, len(additional_issues))
+                
+                log_progress(project_key, len(project_issues) - len(first_batch))
+                return project_key, project_issues
+                
+            except Exception as e:
+                print(f"❌ {project_key}: Error - {e}")
+                return project_key, []
+            finally:
+                session.close()
+        
+        def fetch_with_token_pagination(session, jql, project_key, next_page_token):
+            """Fetch remaining pages using JIRA Cloud token pagination"""
+            all_issues = []
+            page_count = 0
+            max_pages = 100  # Safety limit
+            
+            while next_page_token and page_count < max_pages:
+                page_count += 1
+                
                 try:
-                    # Expand fields to include all custom fields and parent/epic
-                    response = requests.get(
-                        f"{self.base_url}/rest/api/3/search",
-                        auth=self.auth,
-                        headers={"Accept": "application/json"},
+                    response = session.get(
+                        f"{self.base_url}/rest/api/3/search/jql",
                         params={
                             "jql": jql,
-                            "startAt": start_at,
-                            "maxResults": max_results,
-                            "expand": "names,schema",
-                            "fields": "*all"  # Get all fields including custom fields
-                        }
+                            "maxResults": 500,
+                            "nextPageToken": next_page_token,
+                            "expand": "names,schema,changelog,renderedFields", 
+                            "fields": "*all"
+                        },
+                        timeout=30
                     )
-                    if response.status_code == 200:
-                        data = response.json()
-                        issues.extend(data.get('issues', []))
-                        
-                        if len(data.get('issues', [])) < max_results:
-                            break
-                        start_at += max_results
-                    else:
+                    
+                    if response.status_code != 200:
+                        print(f"⚠️ {project_key}: Page {page_count} failed: {response.status_code}")
+                        break
+                    
+                    data = response.json()
+                    
+                    # Handle different response formats
+                    page_issues = []
+                    if 'issues' in data:
+                        page_issues = data.get('issues', [])
+                    elif 'values' in data:
+                        page_issues = data.get('values', [])
+                    elif 'results' in data:
+                        page_issues = data.get('results', [])
+                    
+                    if not page_issues:
+                        print(f"📄 {project_key}: Page {page_count} empty, stopping")
+                        break
+                    
+                    all_issues.extend(page_issues)
+                    print(f"📄 {project_key}: Page {page_count} = {len(page_issues)} issues, total = {len(all_issues)}")
+                    
+                    # Check for next page
+                    is_last = data.get('isLast', True)
+                    if is_last:
+                        print(f"✅ {project_key}: Reached last page ({page_count} total pages)")
                         break
                         
-                except Exception as e:
-                    st.error(f"Error fetching issues for {project_key}: {str(e)}")
-                    break
+                    next_page_token = data.get('nextPageToken')
+                    if not next_page_token:
+                        print(f"✅ {project_key}: No more tokens ({page_count} total pages)")
+                        break
                     
-        return issues
-    
-    def get_worklogs(self, issue_keys: List[str]) -> List[Dict]:
-        """Get worklog data for specified issues"""
-        worklogs = []
-        
-        # Process in batches to avoid overwhelming the API
-        batch_size = 100
-        for i in range(0, len(issue_keys), batch_size):
-            batch = issue_keys[i:i + batch_size]
+                except Exception as e:
+                    print(f"⚠️ {project_key}: Error on page {page_count}: {e}")
+                    break
             
-            for issue_key in batch:
+            print(f"🔄 {project_key}: Token pagination complete - {len(all_issues)} additional issues")
+            return all_issues
+        
+        # Main execution with controlled parallelism
+        print(f"🚀 Fetching Issues for {len(project_keys)} projects")
+        print(f"🔍 Project keys: {project_keys}")
+        
+        # Process projects with limited concurrency to avoid overwhelming API
+        max_concurrent_projects = min(3, len(project_keys))
+        results = {}
+        
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_concurrent_projects) as executor:
+                # Submit all project jobs
+                future_to_project = {
+                    executor.submit(fetch_project_issues_optimized, project_key): project_key
+                    for project_key in project_keys
+                }
+                
+                # Collect results
+                for future in concurrent.futures.as_completed(future_to_project, timeout=300):
+                    try:
+                        project_key = future_to_project[future]
+                        returned_key, project_issues = future.result(timeout=30)
+                        results[project_key] = project_issues
+                        
+                        elapsed = time.time() - start_time
+                        print(f"✅ {project_key}: {len(project_issues)} issues ({elapsed:.1f}s elapsed)")
+                        
+                    except Exception as e:
+                        project_key = future_to_project[future]
+                        print(f"❌ {project_key}: Failed - {e}")
+                        results[project_key] = []
+                        
+        except Exception as e:
+            print(f"❌ Main processing error: {e}")
+            # Simple fallback without restart
+            for key in project_keys:
+                if key not in results:
+                    results[key] = []
+        
+        # Efficient deduplication and final assembly
+        print("🔧 Final Deduplication...")
+        seen_keys = set()
+        
+        for project_key in project_keys:
+            project_issues = results.get(project_key, [])
+            unique_project_issues = []
+            
+            for issue in project_issues:
+                issue_key = issue.get('key')
+                if issue_key and issue_key not in seen_keys:
+                    seen_keys.add(issue_key)
+                    unique_project_issues.append(issue)
+            
+            all_issues.extend(unique_project_issues)
+            print(f"📋 {project_key}: {len(unique_project_issues)} unique issues added")
+        
+        # Final performance report
+        total_time = time.time() - start_time
+        issues_per_second = len(all_issues) / total_time if total_time > 0 else 0
+        target_achieved = total_time <= 300
+        
+        print(f"✅ Issues fetched: {len(all_issues):,}")
+        print(f"⏱️  Total time: {total_time:.1f} seconds ({total_time/60:.1f} minutes)")
+        print(f"📊 Projects processed: {len([k for k, v in results.items() if v])}/{len(project_keys)}")
+        print(f"📊 Projects with issues: {', '.join([k for k, v in results.items() if v])}")
+        
+        return all_issues
+
+    def get_worklogs(self, project_keys: List[str], end_date, filename: str = None) -> List[Dict]:
+        
+        start_time = time.time()
+        all_worklogs = []
+        worklogs_lock = threading.Lock()
+        progress_lock = threading.Lock()
+        total_worklogs_found = 0
+        date_parsing_errors = 0
+        
+        # Calculate month range from end_date
+        try:
+            if isinstance(end_date, str):
+                end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date()
+            elif isinstance(end_date, datetime):
+                end_date_obj = end_date.date()
+            elif isinstance(end_date, date):
+                end_date_obj = end_date
+            else:
+                end_date_obj = datetime.strptime(str(end_date), '%Y-%m-%d').date()
+                
+            start_date_obj = end_date_obj.replace(day=1)
+            start_date = start_date_obj.strftime('%Y-%m-%d')
+            end_date_str = end_date_obj.strftime('%Y-%m-%d')
+            
+        except Exception as e:
+            raise ValueError(f"Invalid end_date format: {end_date}. Expected string 'YYYY-MM-DD' or date object. Error: {e}")
+        
+        def detect_key_types(keys):
+            """Intelligently detect if keys are project keys or issue keys"""
+            project_keys = []
+            issue_keys = []
+            projects_from_issues = set()
+            
+            for key in keys:
+                key = str(key).strip()
+                if not key:
+                    continue
+                    
+                # Check if it looks like an issue key (has hyphen and number)
+                if re.match(r'^[A-Z][A-Z0-9_]*-\d+$', key):
+                    issue_keys.append(key)
+                    # Extract project key from issue key
+                    project_part = key.split('-')[0]
+                    projects_from_issues.add(project_part)
+                else:
+                    # Assume it's a project key
+                    project_keys.append(key)
+            
+            return list(project_keys), issue_keys, list(projects_from_issues)
+        
+        def create_optimized_session():
+            """Create optimized session for Jira API with enhanced parallelism support"""
+            session = requests.Session()
+            session.auth = self.auth
+            session.headers.update({
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "User-Agent": "Python-Jira-Worklog-Client/2025.1",
+                "Connection": "keep-alive"
+            })
+            
+            retry_strategy = Retry(
+                total=2,  # Reduced retries for faster failures
+                backoff_factor=0.2,  # Reduced backoff
+                status_forcelist=[429, 503],  # Only critical errors
+                allowed_methods=["GET", "POST"],
+                raise_on_status=False,
+                respect_retry_after_header=True
+            )
+            
+            adapter = HTTPAdapter(
+                max_retries=retry_strategy,
+                pool_connections=20,  # Increased for parallelism
+                pool_maxsize=50,  # Increased for parallelism
+                pool_block=False  # Don't block on pool
+            )
+            session.mount("http://", adapter)
+            session.mount("https://", adapter)
+            
+            return session
+        
+        def parse_worklog_date(date_input):
+            """Robust date parsing for worklog dates"""
+            if not date_input:
+                return None
+                
+            try:
+                if isinstance(date_input, datetime):
+                    return date_input.replace(tzinfo=None)
+                
+                if isinstance(date_input, date):
+                    return datetime.combine(date_input, datetime.min.time())
+                
+                if isinstance(date_input, str):
+                    clean_date = date_input.replace('T', ' ')
+                    if '.' in clean_date:
+                        clean_date = clean_date.split('.')[0]
+                    if '+' in clean_date:
+                        clean_date = clean_date.split('+')[0]
+                    clean_date = clean_date.replace('Z', '').strip()
+                    
+                    parsed = dateutil.parser.parse(clean_date)
+                    return parsed.replace(tzinfo=None)
+                
+                return dateutil.parser.parse(str(date_input)).replace(tzinfo=None)
+                
+            except Exception as e:
+                nonlocal date_parsing_errors
+                date_parsing_errors += 1
+                return None
+        
+        def is_worklog_in_date_range(worklog):
+            """Check if worklog STARTED date falls within the specified month and year"""
+            try:
+                # Only check the worklog START date fields - not created or updated dates
+                start_date_fields = ['started', 'startDate']  # Primary and fallback fields
+                
+                for field in start_date_fields:
+                    if field in worklog:
+                        worklog_date = parse_worklog_date(worklog[field])
+                        if worklog_date:
+                            worklog_date_only = worklog_date.date()
+                            if start_date_obj <= worklog_date_only <= end_date_obj:
+                                return True
+                
+                return False
+            except Exception:
+                return False
+        
+        def log_progress(identifier, found_count, filtered_count, status="success"):
+            """Thread-safe progress logging"""
+            try:
+                nonlocal total_worklogs_found
+                with progress_lock:
+                    total_worklogs_found += filtered_count
+                    elapsed = time.time() - start_time
+                    rate = total_worklogs_found / elapsed if elapsed > 0 else 0
+                    print(f"[{elapsed:.1f}s] {identifier}: {status} - {filtered_count}/{found_count} worklogs | Total: {total_worklogs_found} | Rate: {rate:.1f}/s")
+            except Exception:
+                pass
+        
+        def get_worklogs_for_project(session, project_key, specific_issues=None):
+            """
+            OPTIMIZED: Get all worklogs for a project with parallel page fetching
+            Key optimization: Fetch all pages in parallel instead of sequentially
+            """
+            project_worklogs = []
+            
+            try:
+                print(f"Retrieving worklogs for project {project_key}...")
+                
+                # First, get total issue count to determine strategy
+                count_response = session.get(
+                    f"{self.base_url}/rest/api/3/search",
+                    params={
+                        "jql": f"project = '{project_key}' AND worklogDate >= '{start_date}' AND worklogDate <= '{end_date_str}'",
+                        "maxResults": 0,
+                        "fields": "key"
+                    },
+                    timeout=10
+                )
+                
+                total_issues = 0
+                if count_response.status_code == 200:
+                    total_issues = count_response.json().get('total', 0)
+                
+                if total_issues == 0:
+                    print(f"{project_key}: No issues with worklogs in date range")
+                    return []
+                
+                print(f"{project_key}: Found {total_issues} issues to process")
+                
+                # Determine optimal page size and worker count based on project size
+                if total_issues <= 500:
+                    page_size = min(total_issues, 500)
+                    max_workers = 1
+                elif total_issues <= 2000:
+                    page_size = 200
+                    max_workers = 5
+                else:
+                    # Large project - aggressive parallelism
+                    page_size = 100
+                    max_workers = 20
+                
+                pages_needed = (total_issues + page_size - 1) // page_size
+                
+                # PARALLEL PAGE FETCHING - Key optimization for large projects
+                def fetch_issue_page(start_at):
+                    """Fetch a single page of issues"""
+                    try:
+                        response = session.get(
+                            f"{self.base_url}/rest/api/3/search",
+                            params={
+                                "jql": f"project = '{project_key}' AND worklogDate >= '{start_date}' AND worklogDate <= '{end_date_str}'",
+                                "maxResults": page_size,
+                                "startAt": start_at,
+                                "fields": "key,summary,updated"
+                            },
+                            timeout=15
+                        )
+                        
+                        if response.status_code == 200:
+                            return response.json().get('issues', [])
+                        return []
+                    except Exception as e:
+                        print(f"{project_key}: Error fetching page at {start_at}: {e}")
+                        return []
+                
+                # Fetch all pages in parallel
+                issues_to_process = []
+                print(f"{project_key}: Fetching {pages_needed} pages with {max_workers} workers...")
+                
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as page_executor:
+                    page_futures = {
+                        page_executor.submit(fetch_issue_page, i * page_size): i
+                        for i in range(pages_needed)
+                    }
+                    
+                    pages_fetched = 0
+                    for future in concurrent.futures.as_completed(page_futures, timeout=60):
+                        try:
+                            issues = future.result(timeout=10)
+                            if issues:
+                                # Filter by specific issues if provided
+                                if specific_issues:
+                                    filtered = [issue for issue in issues 
+                                            if issue.get('key') in specific_issues]
+                                    issues_to_process.extend(filtered)
+                                else:
+                                    issues_to_process.extend(issues)
+                            
+                            pages_fetched += 1
+                            if pages_fetched % 10 == 0:
+                                print(f"{project_key}: Fetched {pages_fetched}/{pages_needed} pages")
+                                
+                        except Exception as e:
+                            print(f"{project_key}: Page fetch failed: {e}")
+                            continue
+                
+                print(f"{project_key}: Retrieved {len(issues_to_process)} issues")
+                
+                # Process issues to get their worklogs - optimized batching
+                if issues_to_process:
+                    batch_size = 100  # Optimal batch size
+                    total_issues = len(issues_to_process)
+                    processed = 0
+                    
+                    # Use multiple sessions for better parallelism
+                    sessions_pool = [session] + [create_optimized_session() for _ in range(4)]
+                    
+                    for i in range(0, total_issues, batch_size):
+                        batch = issues_to_process[i:i + batch_size]
+                        
+                        # Process batch with multiple workers
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as batch_executor:
+                            batch_futures = {
+                                batch_executor.submit(
+                                    get_issue_worklogs, 
+                                    sessions_pool[j % len(sessions_pool)], 
+                                    issue['key']
+                                ): issue['key']
+                                for j, issue in enumerate(batch)
+                            }
+                            
+                            for future in concurrent.futures.as_completed(batch_futures, timeout=120):
+                                try:
+                                    issue_worklogs = future.result(timeout=20)
+                                    if issue_worklogs:
+                                        project_worklogs.extend(issue_worklogs)
+                                    processed += 1
+                                except Exception:
+                                    processed += 1
+                                    continue
+                        
+                        if processed % 100 == 0:
+                            print(f"{project_key}: Processed {processed}/{total_issues} issues, found {len(project_worklogs)} worklogs")
+                    
+                    # Close extra sessions
+                    for extra_session in sessions_pool[1:]:
+                        extra_session.close()
+                
+            except Exception as e:
+                print(f"Error retrieving worklogs for project {project_key}: {e}")
+            
+            return project_worklogs
+        
+        def get_issue_worklogs(session, issue_key):
+            """Get worklogs for a specific issue"""
+            try:
+                response = session.get(
+                    f"{self.base_url}/rest/api/3/issue/{issue_key}/worklog",
+                    params={"maxResults": 1000},
+                    timeout=20
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    all_worklogs = data.get('worklogs', [])
+                    
+                    # Filter worklogs by date range
+                    filtered_worklogs = []
+                    for worklog in all_worklogs:
+                        if is_worklog_in_date_range(worklog):
+                            worklog['issueKey'] = issue_key
+                            filtered_worklogs.append(worklog)
+                    
+                    return filtered_worklogs
+                    
+                elif response.status_code in [404, 410]:
+                    return []
+                else:
+                    return []
+                    
+            except Exception:
+                return []
+        
+        def get_worklogs_for_issue_list(session, issue_keys):
+            """Get worklogs for a list of specific issues - optimized version"""
+            all_issue_worklogs = []
+            
+            print(f"Processing {len(issue_keys)} specific issues for worklogs...")
+            
+            # Create session pool for better parallelism
+            sessions_pool = [session] + [create_optimized_session() for _ in range(4)]
+            
+            # Optimized batch processing
+            batch_size = 200  # Increased batch size
+            total_issues = len(issue_keys)
+            processed = 0
+            
+            for i in range(0, total_issues, batch_size):
+                batch = issue_keys[i:i + batch_size]
+                
+                # Process batch with multiple sessions
+                with concurrent.futures.ThreadPoolExecutor(max_workers=15) as batch_executor:
+                    batch_futures = {
+                        batch_executor.submit(
+                            get_issue_worklogs, 
+                            sessions_pool[j % len(sessions_pool)], 
+                            issue_key
+                        ): issue_key
+                        for j, issue_key in enumerate(batch)
+                    }
+                    
+                    for future in concurrent.futures.as_completed(batch_futures, timeout=180):
+                        try:
+                            issue_worklogs = future.result(timeout=15)
+                            if issue_worklogs:
+                                all_issue_worklogs.extend(issue_worklogs)
+                            processed += 1
+                        except Exception:
+                            processed += 1
+                            continue
+                
+                if processed % 200 == 0 or processed == total_issues:
+                    print(f"Processed {processed}/{total_issues} issues, found {len(all_issue_worklogs)} worklogs")
+            
+            # Close extra sessions
+            for extra_session in sessions_pool[1:]:
+                extra_session.close()
+            
+            return all_issue_worklogs
+        
+        def batch_fetch_issue_details(session, issue_keys):
+            """
+            PERFORMANCE OPTIMIZATION: Batch fetch issue details using JQL
+            This replaces hundreds of individual API calls with just a few batch calls
+            """
+            issue_details = {}
+            
+            if not issue_keys:
+                return issue_details
+            
+            print(f"📊 Batch fetching details for {len(issue_keys)} issues...")
+            
+            # Process in chunks of 100 issues (JQL limit)
+            chunk_size = 100
+            unique_keys = list(set(issue_keys))  # Remove duplicates
+            
+            for i in range(0, len(unique_keys), chunk_size):
+                chunk = unique_keys[i:i+chunk_size]
+                
+                # Build JQL for chunk
+                key_list = ','.join(chunk)
+                jql = f"key in ({key_list})"
+                
                 try:
-                    response = requests.get(
-                        f"{self.base_url}/rest/api/3/issue/{issue_key}/worklog",
-                        auth=self.auth,
-                        headers={"Accept": "application/json"}
+                    response = session.get(
+                        f"{self.base_url}/rest/api/3/search",
+                        params={
+                            "jql": jql,
+                            "fields": "issuetype,summary",
+                            "maxResults": chunk_size
+                        },
+                        timeout=30
                     )
                     
                     if response.status_code == 200:
                         data = response.json()
-                        for worklog in data.get('worklogs', []):
-                            worklog['issue_key'] = issue_key
-                            worklogs.append(worklog)
-                            
+                        issues = data.get('issues', [])
+                        
+                        for issue in issues:
+                            key = issue['key']
+                            fields = issue.get('fields', {})
+                            issue_details[key] = {
+                                'type': fields.get('issuetype', {}).get('name', 'Unknown'),
+                                'summary': fields.get('summary', '')
+                            }
+                        
+                        print(f"   ✓ Fetched {i+len(chunk)}/{len(unique_keys)} issue details")
+                        
                 except Exception as e:
-                    # Continue processing other issues even if one fails
-                    pass
+                    print(f"   ⚠ Warning: Failed to fetch batch {i//chunk_size + 1}: {e}")
+                    # Add placeholder details for failed batch
+                    for key in chunk:
+                        issue_details[key] = {'type': 'Unknown', 'summary': 'Failed to fetch'}
+            
+            # Fill in any missing issues with defaults
+            for key in unique_keys:
+                if key not in issue_details:
+                    issue_details[key] = {'type': 'Unknown', 'summary': 'Not found'}
+            
+            return issue_details
+        
+        def export_to_csv_optimized(worklogs, issue_details_cache, filename):
+            """
+            OPTIMIZED CSV EXPORT: Uses pre-fetched issue details to avoid individual API calls
+            """
+            if not worklogs:
+                print("⚠️ No worklogs to export")
+                return False
+            
+            print(f"📄 Creating optimized CSV export: {filename}")
+            
+            try:
+                # Format helper functions
+                def format_jira_date(date_str):
+                    if not date_str:
+                        return ""
+                    try:
+                        dt = parse_worklog_date(date_str)
+                        if dt:
+                            return dt.strftime('%d/%m/%Y %H:%M')
+                        return str(date_str)
+                    except:
+                        return str(date_str) if date_str else ""
                 
-                # Small delay to avoid rate limiting
-                time.sleep(0.1)
+                def convert_time_spent(time_str):
+                    if not time_str or str(time_str).strip() == '':
+                        return ""
+                    
+                    try:
+                        time_str = str(time_str).strip().lower()
+                        total_hours = 0.0
+                        
+                        # Parse days, hours, minutes
+                        if 'd' in time_str:
+                            parts = time_str.split()
+                            for part in parts:
+                                if 'd' in part:
+                                    days = float(part.replace('d', ''))
+                                    total_hours += days * 7.5
+                                elif 'h' in part:
+                                    hours = float(part.replace('h', ''))
+                                    total_hours += hours
+                                elif 'm' in part:
+                                    minutes = float(part.replace('m', ''))
+                                    total_hours += minutes / 60.0
+                        elif 'h' in time_str or 'm' in time_str:
+                            parts = time_str.split()
+                            for part in parts:
+                                if 'h' in part:
+                                    hours = float(part.replace('h', ''))
+                                    total_hours += hours
+                                elif 'm' in part:
+                                    minutes = float(part.replace('m', ''))
+                                    total_hours += minutes / 60.0
+                        
+                        if total_hours > 0:
+                            return f"{total_hours:.1f}" if total_hours != int(total_hours) else f"{int(total_hours)}"
+                        
+                        try:
+                            num = float(time_str)
+                            return f"{num:.1f}" if num != int(num) else f"{int(num)}"
+                        except:
+                            pass
+                    except:
+                        pass
+                    
+                    return str(time_str)
                 
-        return worklogs
+                def extract_comment(worklog):
+                    comment = worklog.get('comment', '')
+                    if not comment:
+                        return ""
+                    
+                    if isinstance(comment, dict):
+                        if 'content' in comment:
+                            try:
+                                content = comment.get('content', [])
+                                if isinstance(content, list):
+                                    text_parts = []
+                                    for item in content:
+                                        if isinstance(item, dict) and item.get('type') == 'paragraph':
+                                            para_content = item.get('content', [])
+                                            for text_item in para_content:
+                                                if isinstance(text_item, dict) and text_item.get('type') == 'text':
+                                                    text_parts.append(text_item.get('text', ''))
+                                    return ' '.join(text_parts).strip()
+                            except:
+                                pass
+                        
+                        for key in ['text', 'body', 'value']:
+                            if key in comment:
+                                return str(comment[key]).strip()
+                        
+                        return ""
+                    else:
+                        return str(comment).strip()
+                
+                # Write CSV using csv module for better handling
+                with open(filename, 'w', encoding='utf-8', newline='') as csvfile:
+                    fieldnames = ['Author', 'Issue key', 'Project Key', 'Issue type', 'Issue Summary', 
+                                'Work log started', 'Work log created', 'Time spent', 'Comments']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                    
+                    processed = 0
+                    for worklog in worklogs:
+                        try:
+                            # Extract basic info
+                            author_name = ""
+                            if 'author' in worklog and worklog['author']:
+                                author_name = worklog['author'].get('displayName', 
+                                            worklog['author'].get('name', ''))
+                            
+                            issue_key = worklog.get('issueKey', '')
+                            project_key = issue_key.split('-')[0] if '-' in issue_key else ''
+                            
+                            # Get issue details from pre-fetched cache
+                            issue_info = issue_details_cache.get(issue_key, 
+                                        {'type': 'Unknown', 'summary': ''})
+                            
+                            # Write row
+                            writer.writerow({
+                                'Author': author_name,
+                                'Issue key': issue_key,
+                                'Project Key': project_key,
+                                'Issue type': issue_info['type'],
+                                'Issue Summary': issue_info['summary'],
+                                'Work log started': format_jira_date(worklog.get('started', '')),
+                                'Work log created': format_jira_date(worklog.get('created', '')),
+                                'Time spent': convert_time_spent(worklog.get('timeSpent', '')),
+                                'Comments': extract_comment(worklog)
+                            })
+                            
+                            processed += 1
+                            if processed % 200 == 0:
+                                print(f"   Written {processed}/{len(worklogs)} records...")
+                                
+                        except Exception as e:
+                            print(f"   Warning: Skipped worklog due to error: {e}")
+                            continue
+                    
+                    # Verify file was created
+                    if os.path.exists(filename):
+                        file_size = os.path.getsize(filename)
+                        print(f"✅ SUCCESS: CSV file created at {filename}")
+                        print(f"✅ File size: {file_size:,} bytes")
+                        print(f"✅ Records exported: {processed}")
+                        return True
+                    else:
+                        print(f"❌ ERROR: File was not created at {filename}")
+                        return False
+                        
+            except Exception as e:
+                print(f"❌ ERROR writing CSV: {e}")
+                return False
+        
+        # ============= MAIN EXECUTION LOGIC =============
+        
+        print(f"Analyzing {len(project_keys)} input keys...")
+        print(f"Date range: month of {end_date_obj.strftime('%B %Y')}")
+        
+        # Detect what type of keys we have
+        detected_projects, detected_issues, projects_from_issues = detect_key_types(project_keys)
+        
+        print(f"Detected: {len(detected_projects)} project keys, {len(detected_issues)} issue keys")
+        if projects_from_issues:
+            print(f"Projects extracted from issue keys: {projects_from_issues}")
+        
+        # Combine all unique project keys
+        all_projects = list(set(detected_projects + projects_from_issues))
+        
+        if not all_projects and not detected_issues:
+            print("❌ No valid project or issue keys found")
+            return []
+        
+        session = create_optimized_session()
+        
+        try:
+            if detected_issues and not detected_projects:
+                # We have only issue keys - process them directly
+                print(f"\nProcessing {len(detected_issues)} issue keys directly...")
+                all_worklogs = get_worklogs_for_issue_list(session, detected_issues)
+                
+            else:
+                # We have project keys (or projects extracted from issue keys)
+                print(f"\nProcessing {len(all_projects)} projects...")
+                
+                # If we have specific issues from those projects, use them as filter
+                issue_filter = set(detected_issues) if detected_issues else None
+                
+                # Process projects in parallel for better performance
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(all_projects), 3)) as project_executor:
+                    project_futures = {
+                        project_executor.submit(
+                            get_worklogs_for_project, 
+                            create_optimized_session(), 
+                            project_key, 
+                            issue_filter
+                        ): project_key
+                        for project_key in all_projects
+                    }
+                    
+                    for future in concurrent.futures.as_completed(project_futures):
+                        project_key = project_futures[future]
+                        try:
+                            project_worklogs = future.result(timeout=300)
+                            if project_worklogs:
+                                all_worklogs.extend(project_worklogs)
+                                print(f"✓ {project_key}: Found {len(project_worklogs)} worklogs")
+                        except Exception as e:
+                            print(f"✗ {project_key}: Failed - {e}")
+            
+            # Deduplication
+            print(f"\n📊 Deduplicating {len(all_worklogs)} worklogs...")
+            seen_ids = set()
+            unique_worklogs = []
+            
+            for worklog in all_worklogs:
+                worklog_id = worklog.get('id') or worklog.get('worklogId')
+                
+                if worklog_id:
+                    if worklog_id not in seen_ids:
+                        seen_ids.add(worklog_id)
+                        unique_worklogs.append(worklog)
+                else:
+                    # Create fingerprint for worklogs without ID
+                    author_id = worklog.get('author', {}).get('accountId', '')
+                    started = worklog.get('started', '')
+                    time_spent = str(worklog.get('timeSpentSeconds', 0))
+                    issue_key = worklog.get('issueKey', '')
+                    
+                    fingerprint = f"{author_id}_{started}_{time_spent}_{issue_key}"
+                    
+                    if fingerprint not in seen_ids:
+                        seen_ids.add(fingerprint)
+                        unique_worklogs.append(worklog)
+            
+            all_worklogs = unique_worklogs
+            print(f"✓ Deduplicated to {len(all_worklogs)} unique worklogs")
+            
+            # PERFORMANCE OPTIMIZATION: Batch fetch all issue details ONCE
+            if all_worklogs:
+                # Extract all unique issue keys from worklogs
+                all_issue_keys = list(set(wl.get('issueKey', '') for wl in all_worklogs if wl.get('issueKey')))
+                
+                # Batch fetch all issue details at once
+                issue_details_cache = batch_fetch_issue_details(session, all_issue_keys)
+                
+                # Export to CSV if filename provided
+                csv_filename = filename if filename else "jira_worklogs_export.csv"
+                export_success = export_to_csv_optimized(all_worklogs, issue_details_cache, csv_filename)
+                
+                if export_success:
+                    print(f"✅ CSV export completed successfully")
+                else:
+                    print(f"⚠️ CSV export encountered issues")
+            
+        finally:
+            session.close()
+        
+        # Final summary
+        total_time = time.time() - start_time
+        
+        print(f"\n🎯 WORKLOG RETRIEVAL COMPLETE")
+        print(f"📊 Total worklogs found: {len(all_worklogs)}")
+        print(f"📋 Input analysis:")
+        print(f"   - Project keys provided: {len(detected_projects)}")
+        print(f"   - Issue keys provided: {len(detected_issues)}")
+        print(f"   - Projects from issues: {len(projects_from_issues)}")
+        print(f"   - Total projects processed: {len(all_projects)}")
+        print(f"⏱️  Total time: {total_time:.1f} seconds ({total_time/60:.1f} minutes)")
+        
+        if len(all_worklogs) > 0:
+            print(f"📈 Performance: {len(all_worklogs)/total_time:.1f} worklogs/second")
+        
+        print(f"🔍 Date parsing errors: {date_parsing_errors}")
+        
+        # Return format for compatibility
+        metadata = {
+            'total_worklogs': len(all_worklogs),
+            'total_time': total_time,
+            'input_projects': len(detected_projects),
+            'input_issues': len(detected_issues),
+            'projects_processed': len(all_projects),
+            'performance': len(all_worklogs)/total_time if total_time > 0 else 0,
+            'date_range': f"{start_date} to {end_date_str}",
+            'date_parsing_errors': date_parsing_errors
+        }
+        
+        return all_worklogs, metadata
 
 class DocumentParser:
     @staticmethod
@@ -1413,13 +2309,22 @@ def main():
                     if issues:
                         # Process issues data with expanded fields
                         issues_data = []
-                        all_issue_keys = []  # Collect all issue keys for worklog fetching
+                        all_issue_keys = []  # Collect ALL issue keys for worklog fetching
+                        
+                        # Debug: Track issues by project
+                        projects_in_issues = {}
                         
                         for issue in issues:
                             # Extract project key from issue key (e.g., "PROJ-123" -> "PROJ")
                             project_key = issue['key'].split('-')[0] if '-' in issue['key'] else 'UNKNOWN'
                             all_issue_keys.append(issue['key'])
                             
+                            # Track for debugging
+                            if project_key not in projects_in_issues:
+                                projects_in_issues[project_key] = []
+                            projects_in_issues[project_key].append(issue['key'])
+                            
+                            # ... your existing issue processing code ...
                             # Extract parent/epic information
                             parent_summary = None
                             epic_summary = None
@@ -1447,7 +2352,7 @@ def main():
                                 sprint_field = issue['fields']['customfield_10010']
                             else:
                                 sprint_field = 'None'
-                                   
+                                
                             # Combine parent/epic summary
                             parent_epic_summary = parent_summary or epic_summary or ''
                             
@@ -1461,13 +2366,13 @@ def main():
                                 close_date_value = issue['fields'].get('customfield_10252')
                             else:
                                 close_date_value = 'None'
-                                                         
+                                                        
                             #Old EMRF Country Fields
                             if 'customfield_10540' in issue['fields'] and issue['fields']['customfield_10540']:
                                 country = issue['fields']['customfield_10540']['value']
                             else:
                                 country = 'None'
-                                                                         
+                                                                        
                             # Try to find start date from custom fields
                             start_date_fields = ['customfield_10015', 'customfield_10016', 'startDate']
                             for start_field in start_date_fields:
@@ -1494,7 +2399,6 @@ def main():
                                 hdeps_delivery_name = issue['fields']['customfield_11719']['value']
                             else:
                                 hdeps_delivery_name = 'None'
-                            
                         
                             #customfield_10037  -- Time to first response
                             #customfield_12635  -- Time to First Repsonse New SLA
@@ -1599,7 +2503,7 @@ def main():
                             # Create combined goal field with same fallback logic
                             first_resolution_goal = time_to_first_resolution_goal if time_to_first_resolution_goal is not None else (
                                 time_to_first_resolution_new_goal if time_to_first_resolution_new_goal is not None else 'None')
-        
+
                                 
                             if 'customfield_10337' in issue['fields'] and issue['fields']['customfield_10337']:
                                 resolution_comment = issue['fields']['customfield_10337']['value']
@@ -1643,28 +2547,56 @@ def main():
                         
                         issues_df = pd.DataFrame(issues_data)
                         st.session_state.jira_data['issues_df'] = issues_df
+
+                        # Show issue distribution by project
+                        st.info(f"📊 Issues distribution by project:")
+                        for project, keys in projects_in_issues.items():
+                            st.info(f"  {project}: {len(keys)} issues")
+                        st.info(f"🎯 Total issues: {len(all_issue_keys)} from {len(projects_in_issues)} projects")
+
+                        # Fetch worklogs for ALL issues - NO LIMITS!
+                        st.info(f"🚀 Fetching worklogs for ALL {len(all_issue_keys)} issues...")
+                        st.info("⚠️ This may take several minutes for large datasets. Please be patient!")
                         
-                        #Fetch worklogs for ALL issues (with reasonable limit)
-                        #st.info(f"Fetching worklogs for {len(all_issue_keys)} issues...")
+                        # Create a progress bar for better UX
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
                         
-                        # Limit worklog fetching to prevent timeout (adjust as needed)
-                        #worklog_limit = min(len(all_issue_keys), 200)
-                        #limited_issue_keys = all_issue_keys[:worklog_limit]
+                        # Fetch worklogs for ALL issues
+                        worklogs_data, csv_content = jira_api.get_worklogs(
+                            all_issue_keys,  # ALL issue keys, no limits!
+                            filename="/Users/ssalama/Desktop/PythonCode/JIRA AI Agent/JiraAIAgent-Python/latest_worklogs.csv",
+                            end_date=end_date
+                        )
                         
-                        #worklogs = jira_api.get_worklogs(limited_issue_keys)
+                        progress_bar.progress(100)
+                        status_text.text("✅ Worklog fetching completed!")
+
+                        if worklogs_data:
+                            # Show worklog distribution by project
+                            worklog_projects = {}
+                            for worklog in worklogs_data:
+                                project = worklog.get('Project Key', 'Unknown')
+                                worklog_projects[project] = worklog_projects.get(project, 0) + 1
+                            
+                            st.success(f"✅ Fetched {len(issues)} issues and {len(worklogs_data)} worklogs from {len(projects_in_issues)} projects")
+                            
+                            st.info(f"📊 Worklog distribution by project:")
+                            for project, count in sorted(worklog_projects.items()):
+                                st.info(f"  {project}: {count} worklog entries")
+                            
+                            # Store worklogs in session state if needed
+                            if worklogs_data:
+                                worklogs_df = pd.DataFrame(worklogs_data)
+                                st.session_state.jira_data['worklogs_df'] = worklogs_df
+                        else:
+                            st.warning(f"✅ Fetched {len(issues)} issues but no worklogs found")
                         
-                        #if worklogs:
-                        #    worklogs_df = pd.DataFrame(worklogs)
-                        #    st.session_state.jira_data['worklogs_df'] = worklogs_df
-                        #    st.success(f"✅ Fetched {len(issues)} issues and {len(worklogs)} worklogs from {len(config.projects)} projects")
-                        #else:
-                        #    st.warning(f"✅ Fetched {len(issues)} issues but no worklogs found")
-                        
-                        #st.rerun()
-                    #else:
-                        #st.warning("No issues found in the specified date range")
+                    else:
+                        st.warning("No issues found in the specified date range")
             else:
                 st.warning("Please configure Jira settings and select projects first.")
+  
                 
     # Main content area - Updated tabs
     tab1,tab2,tab3,tab4,tab5, tab6 = st.tabs(["✔️ Sanity Check", "📈 Operations Report", "🛠️ Support Report", "🔍Cause Code Analysis", "🧑‍💻 ProdOps Report", "💬 AI Chat"])
@@ -3009,6 +3941,8 @@ def get_excluded_epics():
     return [
         "AIML OPS ENGINEERING",
         "ARA - R&D 2025",
+        "AIML Weekly Source Jobs 2025",
+        
         "TTR DTEDC – Administrative Activities, Additional Assignments & Other",
         "TTR DTEDC – Daily Stand-ups, Team Meetings, Non-Operational Meetings",
         "TTR DTEDC – Operational Trainings, Knowledge Transfers & Shadowing",
@@ -3056,6 +3990,7 @@ def filter_dte_delivery_stories(df):
 
     filtered_df['renamed_parent'] = filtered_df.apply(rename_parent_based_on_summary, axis=1)
 
+
     de_de_stories = filtered_df[filtered_df['renamed_parent'] == 'DE_DE_SPLIT']
     expanded_rows = []
     for _, row in de_de_stories.iterrows():
@@ -3077,6 +4012,8 @@ def filter_dte_delivery_stories(df):
         filtered_df = filtered_df[~filtered_df['summary'].str.contains(excludedSummaries, case=False, na=False)]
         
     return filtered_df
+
+    
 
 def check_missing_due_date(df, end_date):
     """Check if due dates are set correctly for resolved issues"""
@@ -3602,7 +4539,6 @@ def analyze_dtedc_deliveries(df, start_date, end_date):
         end_date = pd.to_datetime(end_date)
 
         filtered_df = filter_dte_delivery_stories(df)
-        #filtered_df.to_csv("/Users/ssalama/Desktop/PythonCode/JIRA AI Agent/OrgDF2.csv")
 
         if 'summary' in filtered_df.columns:
             # Normalize summaries to lowercase for consistent matching
@@ -3629,7 +4565,6 @@ def analyze_dtedc_deliveries(df, start_date, end_date):
         if 'closed_date' in calculation_df.columns:
             calculation_df['closed_date'] = pd.to_datetime(calculation_df['closed_date'], errors='coerce')
             
-        #calculation_df.to_csv("/Users/ssalama/Desktop/PythonCode/JIRA AI Agent/CalcDF2.csv")
 
         total_in_scope = len(calculation_df)
         cancelled_stories = calculation_df[last_month_stories['status'] == 'Cancelled'] if 'status' in last_month_stories.columns else last_month_stories
@@ -3679,6 +4614,9 @@ def analyze_dtedc_deliveries(df, start_date, end_date):
         parent_delivery_summary = calculation_df.groupby('renamed_parent')[['On Time Deliveries', 'Delayed Deliveries', 'Total Deliveries']].sum()
         # Convert to dictionary
         parent_delivery_summary = parent_delivery_summary.to_dict(orient='index')
+       
+
+        
 
         parent_breakdown = calculation_df['renamed_parent'].value_counts().to_dict()
 
@@ -3819,6 +4757,7 @@ def display_dtedc_analysis():
         # Aggregate counts
         grouped_df = filtered_df.groupby('Group')['Total Deliveries'].sum().reset_index()
         grouped_df.rename(columns={'Group': 'Parent'}, inplace=True)
+
 
         st.subheader('🌐 Delivery Breakdown by Parent')
         parent_df['Parent'] = parent_df['Parent'].replace('CDD', 'DataIQ')
