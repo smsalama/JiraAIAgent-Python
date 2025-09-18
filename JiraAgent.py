@@ -2793,7 +2793,18 @@ def main():
         ##Worklog Export Option only to show for Zibi 
         #Replicate Method for fetch with extended fields just for the Reporting purposes with filters
         #hide AI Chat Features
-        if jira_username.lower() == 'steven.salama@iqvia.com'.lower():
+        authorisedusers = [
+            "steven.salama@iqvia.com",
+            "zbigniew.cichon@iqvia.com",
+            "mario.masperi@iqvia.com",
+            "ashok.venkateshwaralu@iqvia.com",
+            "caezar.solinap@iqvia.com",
+            "eric.ruelle@iqvia.com"
+        ]
+        
+        authorisedusers = [user.lower() for user in authorisedusers]
+
+        if jira_username.lower() in authorisedusers:
             st.header("⏱️ Worklogs Download")
             st.subheader("Use End Date Field to Select Month for Worklog Period - E.g 31/07/2025")
             if st.button("⏱️ Get Worklogs", type="primary", use_container_width=True):
