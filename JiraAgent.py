@@ -37,7 +37,7 @@ import json
 import json
 import csv
 import os
-        
+import shutil        
         
         
 
@@ -836,18 +836,6 @@ class JiraAPI:
             except Exception:
                 return False
         
-        def log_progress(identifier, found_count, filtered_count, status="success"):
-            """Thread-safe progress logging"""
-            try:
-                nonlocal total_worklogs_found
-                with progress_lock:
-                    total_worklogs_found += filtered_count
-                    elapsed = time.time() - start_time
-                    rate = total_worklogs_found / elapsed if elapsed > 0 else 0
-                    print(f"[{elapsed:.1f}s] {identifier}: {status} - {filtered_count}/{found_count} worklogs | Total: {total_worklogs_found} | Rate: {rate:.1f}/s")
-            except Exception:
-                pass
-        
         def get_worklogs_for_project(session, project_key, specific_issues=None):
             """
             OPTIMIZED: Get all worklogs for a project with parallel page fetching
@@ -1033,7 +1021,7 @@ class JiraAPI:
             sessions_pool = [session] + [create_optimized_session() for _ in range(4)]
             
             # Optimized batch processing
-            batch_size = 200  # Increased batch size
+            batch_size = 300  # Increased batch size
             total_issues = len(issue_keys)
             processed = 0
             
@@ -1061,7 +1049,7 @@ class JiraAPI:
                             processed += 1
                             continue
                 
-                if processed % 200 == 0 or processed == total_issues:
+                if processed % 300 == 0 or processed == total_issues:
                     print(f"Processed {processed}/{total_issues} issues, found {len(all_issue_worklogs)} worklogs")
             
             # Close extra sessions
@@ -1070,19 +1058,22 @@ class JiraAPI:
             
             return all_issue_worklogs
         
-        def batch_fetch_issue_details(session, issue_keys):
+        def batch_fetch_issue_details(self, session, issue_keys):
             """
-            PERFORMANCE OPTIMIZATION: Batch fetch issue details using JQL
-            This replaces hundreds of individual API calls with just a few batch calls
+            PERFORMANCE OPTIMIZATION: Batch fetch issue details using the NEW JQL endpoint
+            Uses the LATEST Jira REST API v3 /search/jql endpoint (2025)
+            
+            IMPORTANT: The old /rest/api/3/search endpoint was deprecated and removed in August 2025.
+            This function now uses the new /rest/api/3/search/jql endpoint.
             """
             issue_details = {}
             
             if not issue_keys:
                 return issue_details
             
-            print(f"📊 Batch fetching details for {len(issue_keys)} issues...")
+            print(f"📊 Batch fetching details for {len(issue_keys)} issues using NEW JQL endpoint...")
             
-            # Process in chunks of 100 issues (JQL limit)
+            # Process in chunks of 100 issues (recommended for new endpoint)
             chunk_size = 100
             unique_keys = list(set(issue_keys))  # Remove duplicates
             
@@ -1093,42 +1084,148 @@ class JiraAPI:
                 key_list = ','.join(chunk)
                 jql = f"key in ({key_list})"
                 
+                print(f"🔍 JQL Query: {jql[:100]}{'...' if len(jql) > 100 else ''}")
+                
                 try:
-                    response = session.get(
-                        f"{self.base_url}/rest/api/3/search",
-                        params={
-                            "jql": jql,
-                            "fields": "issuetype,summary",
-                            "maxResults": chunk_size
-                        },
-                        timeout=30
-                    )
+                    # Using NEW Jira REST API v3 search/jql endpoint (replaces deprecated /search)
+                    url = f"{self.base_url}/rest/api/3/search/jql"
+                    
+                    # NEW endpoint uses different parameter structure
+                    params = {
+                        "jql": jql,
+                        "fields": "key,issuetype,summary",
+                        "maxResults": chunk_size,
+                        "expand": ""
+                    }
+                    
+                    # The new endpoint uses GET method
+                    response = session.get(url, params=params, timeout=30)
+                    
+                    print(f"📈 Response Status: {response.status_code}")
                     
                     if response.status_code == 200:
                         data = response.json()
+                        
+                        # New endpoint response structure
+                        print(f"🔍 Response keys: {list(data.keys())}")
+                        
+                        # Check for API warnings or errors in response
+                        if 'warningMessages' in data and data['warningMessages']:
+                            print(f"⚠️ API Warnings: {data['warningMessages']}")
+                        
+                        if 'errorMessages' in data and data['errorMessages']:
+                            print(f"❌ API Errors in response: {data['errorMessages']}")
+                        
+                        # Extract issues from new endpoint response
                         issues = data.get('issues', [])
+                        values = data.get('values', [])  # Some versions use 'values'
+                        if not issues and values:
+                            issues = values
+                        
+                        total_found = data.get('total', len(issues))
+                        
+                        print(f"📊 Found {len(issues)} issues (total: {total_found}) in response")
+                        
+                        # Debug: Print the raw structure of first issue
+                        if issues and len(issue_details) == 0:
+                            print(f"🔍 Sample issue structure: {list(issues[0].keys())}")
+                            if 'fields' in issues[0]:
+                                print(f"🔍 Sample fields structure: {list(issues[0]['fields'].keys())}")
                         
                         for issue in issues:
-                            key = issue['key']
+                            key = issue.get('key', 'NO_KEY')
                             fields = issue.get('fields', {})
+                            
+                            # Extract issue type - handle different possible structures
+                            issue_type = 'Unknown'
+                            issuetype_field = fields.get('issuetype')
+                            if issuetype_field:
+                                if isinstance(issuetype_field, dict):
+                                    issue_type = issuetype_field.get('name', 'Unknown')
+                                elif isinstance(issuetype_field, str):
+                                    issue_type = issuetype_field
+                                else:
+                                    print(f"⚠️ Unexpected issuetype format for {key}: {type(issuetype_field)}")
+                            
+                            # Extract summary
+                            summary = fields.get('summary')
+                            if summary is None:
+                                summary = 'No summary available'
+                            elif not isinstance(summary, str):
+                                summary = str(summary)
+                            
                             issue_details[key] = {
-                                'type': fields.get('issuetype', {}).get('name', 'Unknown'),
-                                'summary': fields.get('summary', '')
+                                'type': issue_type,
+                                'summary': summary
                             }
+                            
+                            # Debug output for first few issues
+                            if len(issue_details) <= 3:
+                                print(f"🎯 {key}: type='{issue_type}', summary='{summary[:50]}...'")
                         
-                        print(f"   ✓ Fetched {i+len(chunk)}/{len(unique_keys)} issue details")
+                        print(f"   ✓ Processed {min(i+len(chunk), len(unique_keys))}/{len(unique_keys)} issue details")
+                        
+                    elif response.status_code == 400:
+                        print(f"❌ Bad Request (400): Likely JQL syntax error with new endpoint")
+                        print(f"📄 Response: {response.text[:500]}")
+                        try:
+                            error_data = response.json()
+                            if 'errorMessages' in error_data:
+                                print(f"🔍 Error messages: {error_data['errorMessages']}")
+                            if 'errors' in error_data:
+                                print(f"🔍 Field errors: {error_data['errors']}")
+                        except:
+                            pass
+                            
+                    elif response.status_code == 401:
+                        print(f"❌ Unauthorized (401): Check authentication for new endpoint")
+                        print(f"📄 Response: {response.text[:200]}")
+                        
+                    elif response.status_code == 403:
+                        print(f"❌ Forbidden (403): Check permissions for new JQL endpoint")
+                        print(f"📄 Response: {response.text[:200]}")
+                        
+                    elif response.status_code == 410:
+                        print(f"❌ Gone (410): You may still be using the OLD deprecated endpoint!")
+                        print(f"📄 Current URL: {url}")
+                        print(f"📄 Response: {response.text[:200]}")
+                        
+                    else:
+                        print(f"❌ Unexpected status: {response.status_code}")
+                        print(f"📄 Response: {response.text[:500]}")
+                        
+                    # Add placeholder details for failed batch
+                    if response.status_code != 200:
+                        for key in chunk:
+                            if key not in issue_details:
+                                issue_details[key] = {
+                                    'type': 'Unknown', 
+                                    'summary': f'API Error {response.status_code}'
+                                }
                         
                 except Exception as e:
-                    print(f"   ⚠ Warning: Failed to fetch batch {i//chunk_size + 1}: {e}")
+                    print(f"   ⚠ Exception in batch {i//chunk_size + 1}: {type(e).__name__}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    
                     # Add placeholder details for failed batch
                     for key in chunk:
-                        issue_details[key] = {'type': 'Unknown', 'summary': 'Failed to fetch'}
+                        if key not in issue_details:
+                            issue_details[key] = {
+                                'type': 'Unknown', 
+                                'summary': 'Request failed'
+                            }
             
             # Fill in any missing issues with defaults
             for key in unique_keys:
                 if key not in issue_details:
-                    issue_details[key] = {'type': 'Unknown', 'summary': 'Not found'}
+                    issue_details[key] = {
+                        'type': 'Unknown', 
+                        'summary': 'Not found in any batch'
+                    }
             
+            successful_fetches = len([v for v in issue_details.values() if v['type'] != 'Unknown'])
+            print(f"🎯 Successfully fetched {successful_fetches}/{len(unique_keys)} issue details using NEW endpoint")
             return issue_details
         
         def export_to_csv_optimized(worklogs, issue_details_cache, filename):
@@ -1149,7 +1246,7 @@ class JiraAPI:
                     try:
                         dt = parse_worklog_date(date_str)
                         if dt:
-                            return dt.strftime('%d/%m/%Y %H:%M')
+                            return dt.strftime('%d/%m/%Y')
                         return str(date_str)
                     except:
                         return str(date_str) if date_str else ""
@@ -1376,7 +1473,7 @@ class JiraAPI:
                 all_issue_keys = list(set(wl.get('issueKey', '') for wl in all_worklogs if wl.get('issueKey')))
                 
                 # Batch fetch all issue details at once
-                issue_details_cache = batch_fetch_issue_details(session, all_issue_keys)
+                issue_details_cache = batch_fetch_issue_details(self, session, all_issue_keys)
                 
                 # Export to CSV if filename provided
                 csv_filename = filename if filename else "jira_worklogs_export.csv"
@@ -1384,28 +1481,15 @@ class JiraAPI:
                 
                 if export_success:
                     print(f"✅ CSV export completed successfully")
+                    st.success(f"✅ CSV export completed successfully")
                 else:
                     print(f"⚠️ CSV export encountered issues")
-            
+                    st.warning(f"⚠️ CSV export encountered issues")
         finally:
             session.close()
         
         # Final summary
         total_time = time.time() - start_time
-        
-        print(f"\n🎯 WORKLOG RETRIEVAL COMPLETE")
-        print(f"📊 Total worklogs found: {len(all_worklogs)}")
-        print(f"📋 Input analysis:")
-        print(f"   - Project keys provided: {len(detected_projects)}")
-        print(f"   - Issue keys provided: {len(detected_issues)}")
-        print(f"   - Projects from issues: {len(projects_from_issues)}")
-        print(f"   - Total projects processed: {len(all_projects)}")
-        print(f"⏱️  Total time: {total_time:.1f} seconds ({total_time/60:.1f} minutes)")
-        
-        if len(all_worklogs) > 0:
-            print(f"📈 Performance: {len(all_worklogs)/total_time:.1f} worklogs/second")
-        
-        print(f"🔍 Date parsing errors: {date_parsing_errors}")
         
         # Return format for compatibility
         metadata = {
@@ -2819,8 +2903,8 @@ def main():
                             start_date.strftime('%Y-%m-%d'),
                             end_date.strftime('%Y-%m-%d')
                         )
-                        
                         if issues:
+                            status_text = st.empty()
                             # Process issues data with expanded fields
                             issues_data = []
                             all_issue_keys = []  # Collect ALL issue keys for worklog fetching
@@ -2837,30 +2921,54 @@ def main():
                                 if project_key not in projects_in_issues:
                                     projects_in_issues[project_key] = []
                                 projects_in_issues[project_key].append(issue['key'])
-                                
+                             
+                            
                             # Show issue distribution by project
-                            st.info(f"📊 Issues distribution by project:")
+                            print(f"📊 Issues distribution by project:")
                             for project, keys in projects_in_issues.items():
-                                st.info(f"  {project}: {len(keys)} issues")
-                            st.info(f"🎯 Total issues: {len(all_issue_keys)} from {len(projects_in_issues)} projects")
+                                print(f"  {project}: {len(keys)} issues")
+                            print(f"🎯 Total issues: {len(all_issue_keys)} from {len(projects_in_issues)} projects")
 
                             # Fetch worklogs for ALL issues - NO LIMITS!
-                            st.info(f"🚀 Fetching worklogs for ALL {len(all_issue_keys)} issues...")
-                            st.info("⚠️ This may take several minutes for large datasets. Please be patient!")
+                            print(f"🚀 Fetching worklogs for ALL {len(all_issue_keys)} issues...")
                             
-                            # Create a progress bar for better UX
-                            progress_bar = st.progress(0)
-                            status_text = st.empty()
-                            
-                            # Fetch worklogs for ALL issues
+                            # Format the current date
+                            formatted_date = end_date.strftime("%Y-%m-%d")
+
+                            # Define the Downloads path and ensure it exists
+                            downloads_path = os.path.join(os.path.expanduser("~"), "Downloads")
+                            os.makedirs(downloads_path, exist_ok=True)
+
+                            # Define the base file name and path
+                            base_file_name = f"Jira_Worklogs_{formatted_date}.csv"
+                            base_file_path = os.path.join(downloads_path, base_file_name)
+
+                            # Check if the base file exists
+                            if os.path.exists(base_file_path):
+                                # Find the next available numbered copy
+                                copy_index = 1
+                                while True:
+                                    copy_file_name = f"Jira_Worklogs_{formatted_date}_{copy_index}.csv"
+                                    copy_file_path = os.path.join(downloads_path, copy_file_name)
+                                    if not os.path.exists(copy_file_path):
+                                        shutil.copy(base_file_path, copy_file_path)
+                                        print(f"File exists. A numbered copy has been created at: {copy_file_path}")
+                                        break
+                                    copy_index += 1
+                            else:
+                                # Create a new CSV file with example headers
+                                with open(base_file_path, 'w', newline='') as new_file:
+                                    writer = csv.writer(new_file)
+                                    writer.writerow(['Issue Key', 'Worklog Author', 'Time Spent', 'Date'])  # Example headers
+                                print(f"File does not exist. A new file has been created at: {base_file_path}")
+
+
+                            # Use the updated path in your function
                             worklogs_data, csv_content = jira_api.get_worklogs(
-                                all_issue_keys,  # ALL issue keys, no limits!
-                                filename="/Users/ssalama/Desktop/PythonCode/JIRA AI Agent/JiraAIAgent-Python/latest_worklogs.csv",
+                                all_issue_keys,
+                                filename=base_file_path,
                                 end_date=end_date
                             )
-                            
-                            progress_bar.progress(100)
-                            status_text.text("✅ Worklog fetching completed!")
 
                             if worklogs_data:
                                 # Show worklog distribution by project
@@ -2869,11 +2977,7 @@ def main():
                                     project = worklog.get('Project Key', 'Unknown')
                                     worklog_projects[project] = worklog_projects.get(project, 0) + 1
                                 
-                                st.success(f"✅ Fetched {len(issues)} issues and {len(worklogs_data)} worklogs from {len(projects_in_issues)} projects")
-                                
-                                st.info(f"📊 Worklog distribution by project:")
-                                for project, count in sorted(worklog_projects.items()):
-                                    st.info(f"  {project}: {count} worklog entries")
+                                print(f"✅ Fetched {len(issues)} issues and {len(worklogs_data)} worklogs from {len(projects_in_issues)} projects")
                                 
                                 # Store worklogs in session state if needed
                                 if worklogs_data:
