@@ -461,8 +461,244 @@ class JiraAPI:
         
         # Final performance report
         total_time = time.time() - start_time
-        issues_per_second = len(all_issues) / total_time if total_time > 0 else 0
-        target_achieved = total_time <= 300
+        
+        print(f"✅ Issues fetched: {len(all_issues):,}")
+        print(f"⏱️  Total time: {total_time:.1f} seconds ({total_time/60:.1f} minutes)")
+        print(f"📊 Projects processed: {len([k for k, v in results.items() if v])}/{len(project_keys)}")
+        print(f"📊 Projects with issues: {', '.join([k for k, v in results.items() if v])}")
+        
+        return all_issues
+
+    def get_issues_with_expanded_fields_worklogs(self, project_keys: List[str], start_date: str, end_date: str) -> List[Dict]:
+    
+        start_time = time.time()
+        all_issues = []
+        issues_lock = threading.Lock()
+        total_fetched = 0
+        
+        def create_optimized_session():
+            """Create optimized session with conservative settings"""
+            session = requests.Session()
+            session.auth = self.auth
+            session.headers.update({
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Connection": "keep-alive"
+            })
+            
+            # Conservative retry strategy
+            retry_strategy = Retry(
+                total=3,
+                backoff_factor=1.0,
+                status_forcelist=[429, 500, 502, 503, 504],
+            )
+            
+            adapter = HTTPAdapter(
+                max_retries=retry_strategy,
+                pool_connections=10,
+                pool_maxsize=20
+            )
+            session.mount("http://", adapter)
+            session.mount("https://", adapter)
+            
+            return session
+        
+        def log_progress(project_key, fetched_count):
+            """Thread-safe progress logging"""
+            nonlocal total_fetched
+            with issues_lock:
+                total_fetched += fetched_count
+                elapsed = time.time() - start_time
+                rate = total_fetched / elapsed if elapsed > 0 else 0
+                print(f"[{elapsed:.1f}s] {project_key}: +{fetched_count} | Total: {total_fetched} ({rate:.1f}/sec)")
+        
+        def fetch_project_issues_optimized(project_key):
+            """Fetch all issues for a project with optimized approach"""
+            session = create_optimized_session()
+            project_issues = []
+            
+            try:
+                # Simple JQL query without date filtering - get ALL issues
+                jql = f"project = {project_key}"
+                print(f"🔍 {project_key}: JQL = {jql}")
+                
+                # Step 1: Get first page using token-based pagination
+                initial_response = session.get(
+                    f"{self.base_url}/rest/api/3/search/jql",
+                    params={
+                        "jql": jql,
+                        "maxResults": 500,
+                        "expand": "names,schema,changelog,renderedFields",
+                        "fields": "*all"
+                    },
+                    timeout=30
+                )
+                
+                if initial_response.status_code != 200:
+                    print(f"❌ {project_key}: HTTP {initial_response.status_code}")
+                    print(f"❌ {project_key}: Response = {initial_response.text[:200]}...")
+                    return project_key, []
+                
+                initial_data = initial_response.json()
+                print(f"🔍 {project_key}: Response keys = {list(initial_data.keys())}")
+                
+                # Handle different response formats
+                first_batch = []
+                if 'issues' in initial_data:
+                    first_batch = initial_data.get('issues', [])
+                elif 'values' in initial_data:
+                    first_batch = initial_data.get('values', [])
+                elif 'results' in initial_data:
+                    first_batch = initial_data.get('results', [])
+                
+                print(f"📊 {project_key}: First batch = {len(first_batch)} issues")
+                
+                if len(first_batch) == 0:
+                    print(f"🔍 {project_key}: Full response = {initial_data}")
+                    print(f"❌ {project_key}: No issues found - project may not exist or no access")
+                    return project_key, []
+                
+                project_issues.extend(first_batch)
+                log_progress(project_key, len(first_batch))
+                
+                # Step 2: Check for more pages using token pagination
+                is_last = initial_data.get('isLast', True)
+                next_page_token = initial_data.get('nextPageToken')
+                
+                if not is_last and next_page_token:
+                    print(f"🔄 {project_key}: More pages detected, using token pagination")
+                    additional_issues = fetch_with_token_pagination(session, jql, project_key, next_page_token)
+                    project_issues.extend(additional_issues)
+                    log_progress(project_key, len(additional_issues))
+                
+                log_progress(project_key, len(project_issues) - len(first_batch))
+                return project_key, project_issues
+                
+            except Exception as e:
+                print(f"❌ {project_key}: Error - {e}")
+                return project_key, []
+            finally:
+                session.close()
+        
+        def fetch_with_token_pagination(session, jql, project_key, next_page_token):
+            """Fetch remaining pages using JIRA Cloud token pagination"""
+            all_issues = []
+            page_count = 0
+            max_pages = 100  # Safety limit
+            
+            while next_page_token and page_count < max_pages:
+                page_count += 1
+                
+                try:
+                    response = session.get(
+                        f"{self.base_url}/rest/api/3/search/jql",
+                        params={
+                            "jql": jql,
+                            "maxResults": 500,
+                            "nextPageToken": next_page_token,
+                            "expand": "names,schema,changelog,renderedFields", 
+                            "fields": "*all"
+                        },
+                        timeout=30
+                    )
+                    
+                    if response.status_code != 200:
+                        print(f"⚠️ {project_key}: Page {page_count} failed: {response.status_code}")
+                        break
+                    
+                    data = response.json()
+                    
+                    # Handle different response formats
+                    page_issues = []
+                    if 'issues' in data:
+                        page_issues = data.get('issues', [])
+                    elif 'values' in data:
+                        page_issues = data.get('values', [])
+                    elif 'results' in data:
+                        page_issues = data.get('results', [])
+                    
+                    if not page_issues:
+                        print(f"📄 {project_key}: Page {page_count} empty, stopping")
+                        break
+                    
+                    all_issues.extend(page_issues)
+                    print(f"📄 {project_key}: Page {page_count} = {len(page_issues)} issues, total = {len(all_issues)}")
+                    
+                    # Check for next page
+                    is_last = data.get('isLast', True)
+                    if is_last:
+                        print(f"✅ {project_key}: Reached last page ({page_count} total pages)")
+                        break
+                        
+                    next_page_token = data.get('nextPageToken')
+                    if not next_page_token:
+                        print(f"✅ {project_key}: No more tokens ({page_count} total pages)")
+                        break
+                    
+                except Exception as e:
+                    print(f"⚠️ {project_key}: Error on page {page_count}: {e}")
+                    break
+            
+            print(f"🔄 {project_key}: Token pagination complete - {len(all_issues)} additional issues")
+            return all_issues
+        
+        # Main execution with controlled parallelism
+        print(f"🚀 Fetching Issues for {len(project_keys)} projects")
+        print(f"🔍 Project keys: {project_keys}")
+        
+        # Process projects with limited concurrency to avoid overwhelming API
+        max_concurrent_projects = min(3, len(project_keys))
+        results = {}
+        
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_concurrent_projects) as executor:
+                # Submit all project jobs
+                future_to_project = {
+                    executor.submit(fetch_project_issues_optimized, project_key): project_key
+                    for project_key in project_keys
+                }
+                
+                # Collect results
+                for future in concurrent.futures.as_completed(future_to_project, timeout=300):
+                    try:
+                        project_key = future_to_project[future]
+                        returned_key, project_issues = future.result(timeout=30)
+                        results[project_key] = project_issues
+                        
+                        elapsed = time.time() - start_time
+                        print(f"✅ {project_key}: {len(project_issues)} issues ({elapsed:.1f}s elapsed)")
+                        
+                    except Exception as e:
+                        project_key = future_to_project[future]
+                        print(f"❌ {project_key}: Failed - {e}")
+                        results[project_key] = []
+                        
+        except Exception as e:
+            print(f"❌ Main processing error: {e}")
+            # Simple fallback without restart
+            for key in project_keys:
+                if key not in results:
+                    results[key] = []
+        
+        # Efficient deduplication and final assembly
+        print("🔧 Final Deduplication...")
+        seen_keys = set()
+        
+        for project_key in project_keys:
+            project_issues = results.get(project_key, [])
+            unique_project_issues = []
+            
+            for issue in project_issues:
+                issue_key = issue.get('key')
+                if issue_key and issue_key not in seen_keys:
+                    seen_keys.add(issue_key)
+                    unique_project_issues.append(issue)
+            
+            all_issues.extend(unique_project_issues)
+            print(f"📋 {project_key}: {len(unique_project_issues)} unique issues added")
+        
+        # Final performance report
+        total_time = time.time() - start_time
         
         print(f"✅ Issues fetched: {len(all_issues):,}")
         print(f"⏱️  Total time: {total_time:.1f} seconds ({total_time/60:.1f} minutes)")
@@ -2547,59 +2783,101 @@ def main():
                         
                         issues_df = pd.DataFrame(issues_data)
                         st.session_state.jira_data['issues_df'] = issues_df
-
-                        # Show issue distribution by project
-                        st.info(f"📊 Issues distribution by project:")
-                        for project, keys in projects_in_issues.items():
-                            st.info(f"  {project}: {len(keys)} issues")
-                        st.info(f"🎯 Total issues: {len(all_issue_keys)} from {len(projects_in_issues)} projects")
-
-                        # Fetch worklogs for ALL issues - NO LIMITS!
-                        st.info(f"🚀 Fetching worklogs for ALL {len(all_issue_keys)} issues...")
-                        st.info("⚠️ This may take several minutes for large datasets. Please be patient!")
-                        
-                        # Create a progress bar for better UX
-                        progress_bar = st.progress(0)
-                        status_text = st.empty()
-                        
-                        # Fetch worklogs for ALL issues
-                        worklogs_data, csv_content = jira_api.get_worklogs(
-                            all_issue_keys,  # ALL issue keys, no limits!
-                            filename="/Users/ssalama/Desktop/PythonCode/JIRA AI Agent/JiraAIAgent-Python/latest_worklogs.csv",
-                            end_date=end_date
-                        )
-                        
-                        progress_bar.progress(100)
-                        status_text.text("✅ Worklog fetching completed!")
-
-                        if worklogs_data:
-                            # Show worklog distribution by project
-                            worklog_projects = {}
-                            for worklog in worklogs_data:
-                                project = worklog.get('Project Key', 'Unknown')
-                                worklog_projects[project] = worklog_projects.get(project, 0) + 1
-                            
-                            st.success(f"✅ Fetched {len(issues)} issues and {len(worklogs_data)} worklogs from {len(projects_in_issues)} projects")
-                            
-                            st.info(f"📊 Worklog distribution by project:")
-                            for project, count in sorted(worklog_projects.items()):
-                                st.info(f"  {project}: {count} worklog entries")
-                            
-                            # Store worklogs in session state if needed
-                            if worklogs_data:
-                                worklogs_df = pd.DataFrame(worklogs_data)
-                                st.session_state.jira_data['worklogs_df'] = worklogs_df
-                        else:
-                            st.warning(f"✅ Fetched {len(issues)} issues but no worklogs found")
-                        
+                          
                     else:
                         st.warning("No issues found in the specified date range")
             else:
                 st.warning("Please configure Jira settings and select projects first.")
-  
+        
+        
+        ##Worklog Export Option only to show for Zibi 
+        #Replicate Method for fetch with extended fields just for the Reporting purposes with filters
+        #hide AI Chat Features
+        if jira_username.lower() == 'steven.salama@iqvia.com'.lower():
+            st.header("⏱️ Worklogs Download")
+            st.subheader("Use End Date Field to Select Month for Worklog Period - E.g 31/07/2025")
+            if st.button("⏱️ Get Worklogs", type="primary", use_container_width=True):
+                if hasattr(st.session_state, 'jira_config') and st.session_state.jira_config.projects:
+                    config = st.session_state.jira_config
+                    jira_api = JiraAPI(config)
                 
+                    with st.spinner("Fetching Jira Worklogs data..."):
+                        # Fetch issues with expanded fields
+                        issues = jira_api.get_issues_with_expanded_fields_worklogs(
+                            config.projects,
+                            start_date.strftime('%Y-%m-%d'),
+                            end_date.strftime('%Y-%m-%d')
+                        )
+                        
+                        if issues:
+                            # Process issues data with expanded fields
+                            issues_data = []
+                            all_issue_keys = []  # Collect ALL issue keys for worklog fetching
+                            
+                            # Debug: Track issues by project
+                            projects_in_issues = {}
+                            
+                            for issue in issues:
+                                # Extract project key from issue key (e.g., "PROJ-123" -> "PROJ")
+                                project_key = issue['key'].split('-')[0] if '-' in issue['key'] else 'UNKNOWN'
+                                all_issue_keys.append(issue['key'])
+                                
+                                # Track for debugging
+                                if project_key not in projects_in_issues:
+                                    projects_in_issues[project_key] = []
+                                projects_in_issues[project_key].append(issue['key'])
+                                
+                            # Show issue distribution by project
+                            st.info(f"📊 Issues distribution by project:")
+                            for project, keys in projects_in_issues.items():
+                                st.info(f"  {project}: {len(keys)} issues")
+                            st.info(f"🎯 Total issues: {len(all_issue_keys)} from {len(projects_in_issues)} projects")
+
+                            # Fetch worklogs for ALL issues - NO LIMITS!
+                            st.info(f"🚀 Fetching worklogs for ALL {len(all_issue_keys)} issues...")
+                            st.info("⚠️ This may take several minutes for large datasets. Please be patient!")
+                            
+                            # Create a progress bar for better UX
+                            progress_bar = st.progress(0)
+                            status_text = st.empty()
+                            
+                            # Fetch worklogs for ALL issues
+                            worklogs_data, csv_content = jira_api.get_worklogs(
+                                all_issue_keys,  # ALL issue keys, no limits!
+                                filename="/Users/ssalama/Desktop/PythonCode/JIRA AI Agent/JiraAIAgent-Python/latest_worklogs.csv",
+                                end_date=end_date
+                            )
+                            
+                            progress_bar.progress(100)
+                            status_text.text("✅ Worklog fetching completed!")
+
+                            if worklogs_data:
+                                # Show worklog distribution by project
+                                worklog_projects = {}
+                                for worklog in worklogs_data:
+                                    project = worklog.get('Project Key', 'Unknown')
+                                    worklog_projects[project] = worklog_projects.get(project, 0) + 1
+                                
+                                st.success(f"✅ Fetched {len(issues)} issues and {len(worklogs_data)} worklogs from {len(projects_in_issues)} projects")
+                                
+                                st.info(f"📊 Worklog distribution by project:")
+                                for project, count in sorted(worklog_projects.items()):
+                                    st.info(f"  {project}: {count} worklog entries")
+                                
+                                # Store worklogs in session state if needed
+                                if worklogs_data:
+                                    worklogs_df = pd.DataFrame(worklogs_data)
+                                    st.session_state.jira_data['worklogs_df'] = worklogs_df
+                            else:
+                                st.warning(f"✅ Fetched {len(issues)} issues but no worklogs found")
+                            
+                        else:
+                            st.warning("No issues found in the specified date range")
+                else:
+                    st.warning("Please configure Jira settings and select projects first.")
+              
     # Main content area - Updated tabs
-    tab1,tab2,tab3,tab4,tab5, tab6 = st.tabs(["✔️ Sanity Check", "📈 Operations Report", "🛠️ Support Report", "🔍Cause Code Analysis", "🧑‍💻 ProdOps Report", "💬 AI Chat"])
+    tab1,tab2,tab3,tab4,tab5 = st.tabs(["✔️ Sanity Check", "📈 Operations Report", "🛠️ Support Report", "🔍Cause Code Analysis", "🧑‍💻 ProdOps Report"])
     #"💬 AI Chat"
     #Sanity Check Tab
     with tab1:
@@ -2619,8 +2897,8 @@ def main():
     with tab5:
         display_prodOps_analysis()
     #AI Chat Tab
-    with tab6:
-        display_enhanced_ai_chat_tab()
+    #with tab6:
+        #display_enhanced_ai_chat_tab()
 
         
 def display_project_dashboard(df, project_name):
@@ -6361,7 +6639,7 @@ def create_first_response_scatter_month(df, last_month):
     for _, row in df_month.iterrows():
         if 'first_response_time' in df.columns and 'first_response_goal' in df.columns:
             if row['first_response_time'] > row['first_response_goal']:
-                colors.append('red')
+                colors.append('yellow')
             else:
                 colors.append('blue')
         else:
@@ -6717,7 +6995,7 @@ def create_resolution_time_scatter_month(df, last_month):
     for _, row in df_month.iterrows():
         if 'first_resolution_time' in df.columns and 'first_resolution_goal' in df.columns:
             if row['first_resolution_time'] > row['first_resolution_goal']:
-                colors.append('red')
+                colors.append('yellow')
             else:
                 colors.append('blue')
         else:
