@@ -1169,8 +1169,50 @@ class JiraAPI:
                                         'project_key': project_key
                                     }
                             else:
+                                if project_key == 'DSTAR':
+                                    # Define excluded keywords for DSTAR
+                                    TTRs = [
+                                        'Administrative Activities',
+                                        'Additional Assignments & Other Operational Trainings',
+                                        'Knowledge Transfers & Shadowing Daily Stand-ups',
+                                        'Team Meetings',
+                                        'Non-Operational Meetings Personal Development Trainings'
+                                    ]
+                                    
+                                    # Check if summary contains any excluded keywords
+                                    TTR_check = any(keyword.lower() in summary.lower() for keyword in TTRs)
+                                    
+                                    if TTR_check:
+                                        # Use parent summary
+                                        if parent_summary:
+                                            issue_details[key] = {
+                                                'type': issue_type,
+                                                'summary': summary,
+                                                'parent_epic_summary': parent_summary,
+                                                'reporting_process': reporting_process
+                                            }
+                                        else:
+                                            parent_keys_to_fetch.add(parent_key)
+                                            issue_details[key] = {
+                                                'type': issue_type,
+                                                'summary': summary,
+                                                'parent_epic_summary': '',
+                                                'reporting_process': reporting_process,
+                                                'parent_key': parent_key,
+                                                'is_subtask': True,
+                                                'project_key': project_key
+                                            }
+                                    else:
+                                        # Use "ARA" for non-excluded DSTAR items
+                                        issue_details[key] = {
+                                            'type': issue_type,
+                                            'summary': summary,
+                                            'parent_epic_summary': 'ARA',
+                                            'reporting_process': reporting_process
+                                        }
+                                        
                                 # Handle DTEDC Epics specially - use just the summary
-                                if project_key == 'DTEDC' and issue_type.lower() == 'Epic'.lower():
+                                elif project_key == 'DTEDC' and issue_type.lower() == 'Epic'.lower():
                                     issue_details[key] = {
                                         'type': issue_type,
                                         'summary': summary,
@@ -1185,7 +1227,6 @@ class JiraAPI:
                                         'parent_epic_summary': reporting_process if project_key == 'HDEPS' else parent_summary,
                                         'reporting_process': reporting_process
                                     }
-                        
                     else:
                         print(f"Unexpected status: {response.status_code}")
                         
@@ -1467,7 +1508,7 @@ class JiraAPI:
                             elif project_key == "DTEDC":
                                 delivery_name = issue_info.get('parent_epic_summary', '')
                             elif project_key == "DSTAR":
-                                delivery_name = "ARA"
+                                delivery_name = issue_info.get('parent_epic_summary', '')
                             else:
                                 delivery_name = ""
                             
