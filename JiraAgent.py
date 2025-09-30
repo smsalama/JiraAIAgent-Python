@@ -707,13 +707,10 @@ class JiraAPI:
         
         return all_issues
 
-    def get_worklogs(self, project_keys: List[str], end_date, filename: str = None) -> List[Dict]:
+    def get_worklogs(self, project_keys: List[str], start_date, end_date, filename: str = None) -> List[Dict]:
         
         start_time = time.time()
         all_worklogs = []
-        worklogs_lock = threading.Lock()
-        progress_lock = threading.Lock()
-        total_worklogs_found = 0
         date_parsing_errors = 0
         
         # Calculate month range from end_date
@@ -727,7 +724,7 @@ class JiraAPI:
             else:
                 end_date_obj = datetime.strptime(str(end_date), '%Y-%m-%d').date()
                 
-            start_date_obj = end_date_obj.replace(day=1)
+            start_date_obj = start_date
             start_date = start_date_obj.strftime('%Y-%m-%d')
             end_date_str = end_date_obj.strftime('%Y-%m-%d')
             
@@ -3094,9 +3091,10 @@ def main():
 
 
                             # Use the updated path in your function
-                            worklogs_data, csv_content = jira_api.get_worklogs(
+                            worklogs_data = jira_api.get_worklogs(
                                 all_issue_keys,
                                 filename=base_file_name,
+                                start_date=start_date,
                                 end_date=end_date
                             )
 
