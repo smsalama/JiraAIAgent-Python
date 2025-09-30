@@ -769,9 +769,9 @@ class JiraAPI:
             })
             
             retry_strategy = Retry(
-                total=2,  # Reduced retries for faster failures
-                backoff_factor=0.2,  # Reduced backoff
-                status_forcelist=[429, 503],  # Only critical errors
+                total=2,
+                backoff_factor=0.2,
+                status_forcelist=[429, 503],
                 allowed_methods=["GET", "POST"],
                 raise_on_status=False,
                 respect_retry_after_header=True
@@ -779,9 +779,9 @@ class JiraAPI:
             
             adapter = HTTPAdapter(
                 max_retries=retry_strategy,
-                pool_connections=20,  # Increased for parallelism
-                pool_maxsize=50,  # Increased for parallelism
-                pool_block=False  # Don't block on pool
+                pool_connections=20,
+                pool_maxsize=50,
+                pool_block=False
             )
             session.mount("http://", adapter)
             session.mount("https://", adapter)
@@ -821,8 +821,7 @@ class JiraAPI:
         def is_worklog_in_date_range(worklog):
             """Check if worklog STARTED date falls within the specified month and year"""
             try:
-                # Only check the worklog START date fields - not created or updated dates
-                start_date_fields = ['started', 'startDate']  # Primary and fallback fields
+                start_date_fields = ['started', 'startDate']
                 
                 for field in start_date_fields:
                     if field in worklog:
@@ -837,16 +836,12 @@ class JiraAPI:
                 return False
         
         def get_worklogs_for_project(session, project_key, specific_issues=None):
-            """
-            OPTIMIZED: Get all worklogs for a project with parallel page fetching
-            Key optimization: Fetch all pages in parallel instead of sequentially
-            """
+            """Get all worklogs for a project with parallel page fetching"""
             project_worklogs = []
             
             try:
                 print(f"Retrieving worklogs for project {project_key}...")
                 
-                # First, get total issue count to determine strategy
                 count_response = session.get(
                     f"{self.base_url}/rest/api/3/search",
                     params={
@@ -867,7 +862,6 @@ class JiraAPI:
                 
                 print(f"{project_key}: Found {total_issues} issues to process")
                 
-                # Determine optimal page size and worker count based on project size
                 if total_issues <= 500:
                     page_size = min(total_issues, 500)
                     max_workers = 1
@@ -875,13 +869,11 @@ class JiraAPI:
                     page_size = 200
                     max_workers = 5
                 else:
-                    # Large project - aggressive parallelism
                     page_size = 100
                     max_workers = 20
                 
                 pages_needed = (total_issues + page_size - 1) // page_size
                 
-                # PARALLEL PAGE FETCHING - Key optimization for large projects
                 def fetch_issue_page(start_at):
                     """Fetch a single page of issues"""
                     try:
@@ -903,7 +895,6 @@ class JiraAPI:
                         print(f"{project_key}: Error fetching page at {start_at}: {e}")
                         return []
                 
-                # Fetch all pages in parallel
                 issues_to_process = []
                 print(f"{project_key}: Fetching {pages_needed} pages with {max_workers} workers...")
                 
@@ -918,7 +909,6 @@ class JiraAPI:
                         try:
                             issues = future.result(timeout=10)
                             if issues:
-                                # Filter by specific issues if provided
                                 if specific_issues:
                                     filtered = [issue for issue in issues 
                                             if issue.get('key') in specific_issues]
@@ -936,19 +926,16 @@ class JiraAPI:
                 
                 print(f"{project_key}: Retrieved {len(issues_to_process)} issues")
                 
-                # Process issues to get their worklogs - optimized batching
                 if issues_to_process:
-                    batch_size = 100  # Optimal batch size
+                    batch_size = 100
                     total_issues = len(issues_to_process)
                     processed = 0
                     
-                    # Use multiple sessions for better parallelism
                     sessions_pool = [session] + [create_optimized_session() for _ in range(4)]
                     
                     for i in range(0, total_issues, batch_size):
                         batch = issues_to_process[i:i + batch_size]
                         
-                        # Process batch with multiple workers
                         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as batch_executor:
                             batch_futures = {
                                 batch_executor.submit(
@@ -972,7 +959,6 @@ class JiraAPI:
                         if processed % 100 == 0:
                             print(f"{project_key}: Processed {processed}/{total_issues} issues, found {len(project_worklogs)} worklogs")
                     
-                    # Close extra sessions
                     for extra_session in sessions_pool[1:]:
                         extra_session.close()
                 
@@ -994,7 +980,6 @@ class JiraAPI:
                     data = response.json()
                     all_worklogs = data.get('worklogs', [])
                     
-                    # Filter worklogs by date range
                     filtered_worklogs = []
                     for worklog in all_worklogs:
                         if is_worklog_in_date_range(worklog):
@@ -1017,18 +1002,15 @@ class JiraAPI:
             
             print(f"Processing {len(issue_keys)} specific issues for worklogs...")
             
-            # Create session pool for better parallelism
             sessions_pool = [session] + [create_optimized_session() for _ in range(4)]
             
-            # Optimized batch processing
-            batch_size = 300  # Increased batch size
+            batch_size = 300
             total_issues = len(issue_keys)
             processed = 0
             
             for i in range(0, total_issues, batch_size):
                 batch = issue_keys[i:i + batch_size]
                 
-                # Process batch with multiple sessions
                 with concurrent.futures.ThreadPoolExecutor(max_workers=15) as batch_executor:
                     batch_futures = {
                         batch_executor.submit(
@@ -1052,48 +1034,33 @@ class JiraAPI:
                 if processed % 300 == 0 or processed == total_issues:
                     print(f"Processed {processed}/{total_issues} issues, found {len(all_issue_worklogs)} worklogs")
             
-            # Close extra sessions
             for extra_session in sessions_pool[1:]:
                 extra_session.close()
             
             return all_issue_worklogs
         
         def batch_fetch_issue_details(self, session, issue_keys):
-            """
-            PERFORMANCE OPTIMIZATION: Batch fetch issue details using the NEW JQL endpoint
-            Enhanced to include parent epic summary and reporting process (customfield_12603)
-            Parent logic: 
-            - Story: uses parent (epic) summary
-            - Sub-task in HDEPS: uses direct parent (story) summary
-            - Sub-task in DTEDC: uses parent's parent (story's epic) summary
-            - Sub-task in other projects: uses parent's parent (story's epic) summary
-            """
+            """Batch fetch issue details using the JQL endpoint with enhanced fields"""
             issue_details = {}
             
             if not issue_keys:
                 return issue_details
             
-            # Process in chunks of 100 issues (recommended for new endpoint)
             chunk_size = 100
-            unique_keys = list(set(issue_keys))  # Remove duplicates
+            unique_keys = list(set(issue_keys))
             
-            # Store parent keys that need to be fetched for sub-tasks
             parent_keys_to_fetch = set()
-            hdeps_parent_keys_to_fetch = set()  # Separate tracking for HDEPS subtasks
+            hdeps_parent_keys_to_fetch = set()
             
             for i in range(0, len(unique_keys), chunk_size):
                 chunk = unique_keys[i:i+chunk_size]
                 
-                # Build JQL for chunk
                 key_list = ','.join(chunk)
                 jql = f"key in ({key_list})"
                 
-                
                 try:
-                    # Using NEW Jira REST API v3 search/jql endpoint
                     url = f"{self.base_url}/rest/api/3/search/jql"
                     
-                    # Enhanced fields to include epic and custom field
                     params = {
                         "jql": jql,
                         "fields": "key,issuetype,summary,parent,customfield_12603",
@@ -1106,30 +1073,23 @@ class JiraAPI:
                     if response.status_code == 200:
                         data = response.json()
                         
-                        # Check for API warnings or errors
                         if 'warningMessages' in data and data['warningMessages']:
-                            print(f"⚠️ API Warnings: {data['warningMessages']}")
+                            print(f"API Warnings: {data['warningMessages']}")
                         
                         if 'errorMessages' in data and data['errorMessages']:
-                            print(f"❌ API Errors in response: {data['errorMessages']}")
+                            print(f"API Errors in response: {data['errorMessages']}")
                         
-                        # Extract issues from response
                         issues = data.get('issues', [])
-                        values = data.get('values', [])  # Some versions use 'values'
+                        values = data.get('values', [])
                         if not issues and values:
                             issues = values
                         
-                        total_found = data.get('total', len(issues))
-                        
-                        # Process issues and identify sub-tasks that need parent lookup
                         for issue in issues:
                             key = issue.get('key', 'NO_KEY')
                             fields = issue.get('fields', {})
                             
-                            # Extract project key from issue key (e.g., "DTEDC-123" -> "DTEDC")
                             project_key = key.split('-')[0] if '-' in key else ''
                             
-                            # Extract issue type
                             issue_type = 'Unknown'
                             issuetype_field = fields.get('issuetype')
                             if issuetype_field:
@@ -1138,12 +1098,10 @@ class JiraAPI:
                                 elif isinstance(issuetype_field, str):
                                     issue_type = issuetype_field
                             
-                            # Extract summary
                             summary = fields.get('summary', 'No summary available')
                             if not isinstance(summary, str):
                                 summary = str(summary)
                             
-                            # Extract parent info
                             parent_field = fields.get('parent')
                             parent_key = None
                             parent_summary = ''
@@ -1155,20 +1113,14 @@ class JiraAPI:
                                     parent_summary = parent_fields.get('summary', '')
                                     if not isinstance(parent_summary, str):
                                         parent_summary = str(parent_summary) if parent_summary else ''
-                                
-                            elif parent_field:
-                                print(f"   ⚠️ {key} has parent field but it's not a dict: {type(parent_field)}")
                             
-                            # Determine if this is a sub-task
                             issue_type_lower = issue_type.lower()
                             is_subtask = 'sub-task' in issue_type_lower or 'subtask' in issue_type_lower
                             
-                            # Extract reporting process (customfield_12603)
                             reporting_process = ''
                             custom_field = fields.get('customfield_12603')
                             if custom_field:
                                 if isinstance(custom_field, dict):
-                                    # Handle different custom field formats
                                     if 'value' in custom_field:
                                         reporting_process = str(custom_field['value'])
                                     elif 'name' in custom_field:
@@ -1178,7 +1130,6 @@ class JiraAPI:
                                     else:
                                         reporting_process = str(custom_field)
                                 elif isinstance(custom_field, list) and custom_field:
-                                    # Handle array of values
                                     if isinstance(custom_field[0], dict):
                                         reporting_process = ', '.join([
                                             item.get('value') or item.get('name') or str(item) 
@@ -1189,56 +1140,58 @@ class JiraAPI:
                                 else:
                                     reporting_process = str(custom_field)
                             
-                            # Handle different project logic for sub-tasks
                             if is_subtask and parent_key:
                                 if project_key == 'HDEPS':
-                                    # HDEPS: Need direct parent summary (task/service request/change request/incident)
-                                    # Check if we already have it from the parent field
                                     if parent_summary:
                                         issue_details[key] = {
                                             'type': issue_type,
                                             'summary': summary,
-                                            'parent_epic_summary': parent_summary,  # Direct parent summary
+                                            'parent_epic_summary': parent_summary,
                                             'reporting_process': reporting_process
                                         }
                                     else:
-                                        # Parent summary not available, need to fetch it
                                         hdeps_parent_keys_to_fetch.add(parent_key)
                                         issue_details[key] = {
                                             'type': issue_type,
                                             'summary': summary,
-                                            'parent_epic_summary': reporting_process,  # Will update with parent summary
+                                            'parent_epic_summary': reporting_process,
                                             'reporting_process': reporting_process,
                                             'parent_key': parent_key,
                                             'is_subtask': True,
                                             'project_key': project_key
                                         }
                                 else:
-                                    # DTEDC and others: Need to fetch parent's parent (epic)
                                     parent_keys_to_fetch.add(parent_key)
                                     issue_details[key] = {
                                         'type': issue_type,
                                         'summary': summary,
-                                        'parent_epic_summary': '',  # Will update later
+                                        'parent_epic_summary': '',
                                         'reporting_process': reporting_process,
                                         'parent_key': parent_key,
                                         'is_subtask': True,
                                         'project_key': project_key
                                     }
                             else:
-                                # Stories and non-subtasks: use direct parent (epic) summary
-                                issue_details[key] = {
-                                    'type': issue_type,
-                                    'summary': summary,
-                                    'parent_epic_summary': parent_summary,
-                                    'reporting_process': reporting_process
-                                }
+                                # Handle DTEDC Epics specially - use just the summary
+                                if project_key == 'DTEDC' and issue_type.lower() == 'Epic'.lower():
+                                    issue_details[key] = {
+                                        'type': issue_type,
+                                        'summary': summary,
+                                        'parent_epic_summary': summary,  # Use its own summary
+                                        'reporting_process': reporting_process
+                                    }
+                                else:
+                                    # Non-subtasks: HDEPS uses reporting_process, DTEDC uses parent_summary
+                                    issue_details[key] = {
+                                        'type': issue_type,
+                                        'summary': summary,
+                                        'parent_epic_summary': reporting_process if project_key == 'HDEPS' else parent_summary,
+                                        'reporting_process': reporting_process
+                                    }
                         
                     else:
-                        print(f"❌ Unexpected status: {response.status_code}")
-                        print(f"📄 Response: {response.text[:500]}")
+                        print(f"Unexpected status: {response.status_code}")
                         
-                    # Add placeholder details for failed batch
                     if response.status_code != 200:
                         for key in chunk:
                             if key not in issue_details:
@@ -1250,11 +1203,8 @@ class JiraAPI:
                                 }
                         
                 except Exception as e:
-                    print(f"   ⚠ Exception in batch {i//chunk_size + 1}: {type(e).__name__}: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    print(f"Exception in batch {i//chunk_size + 1}: {type(e).__name__}: {e}")
                     
-                    # Add placeholder details for failed batch
                     for key in chunk:
                         if key not in issue_details:
                             issue_details[key] = {
@@ -1264,7 +1214,6 @@ class JiraAPI:
                                 'reporting_process': ''
                             }
             
-            # First, fetch parent summaries for HDEPS sub-tasks (they need direct parent summary)
             if hdeps_parent_keys_to_fetch:
                 hdeps_parent_summaries = {}
                 
@@ -1289,8 +1238,6 @@ class JiraAPI:
                             data = response.json()
                             issues = data.get('issues', []) or data.get('values', [])
                             
-                            print(f"   📋 Processing {len(issues)} HDEPS parent stories...")
-                            
                             for issue in issues:
                                 parent_key = issue.get('key')
                                 fields = issue.get('fields', {})
@@ -1300,28 +1247,16 @@ class JiraAPI:
                                     parent_summary = str(parent_summary) if parent_summary else ''
                                 
                                 hdeps_parent_summaries[parent_key] = parent_summary
-                                print(f"      ✓ HDEPS parent {parent_key}: '{parent_summary[:50]}...'")
-                            
-                            print(f"   ✓ Fetched {len(hdeps_parent_summaries)} HDEPS parent summaries")
                             
                     except Exception as e:
-                        print(f"   ⚠ Exception fetching HDEPS parent details: {type(e).__name__}: {e}")
-                        import traceback
-                        traceback.print_exc()
+                        print(f"Exception fetching HDEPS parent details: {type(e).__name__}: {e}")
                 
-                # Update HDEPS sub-tasks with their direct parent summaries
-                hdeps_updated = 0
                 for key, details in issue_details.items():
                     if details.get('project_key') == 'HDEPS' and details.get('is_subtask'):
                         parent_key = details.get('parent_key')
                         if parent_key in hdeps_parent_summaries:
                             details['parent_epic_summary'] = hdeps_parent_summaries[parent_key]
-                            hdeps_updated += 1
-                        else:
-                            print(f"   ⚠ HDEPS sub-task {key}: parent {parent_key} not found in summaries")
-                
             
-            # Now fetch parent details for sub-tasks that need epic summaries (non-HDEPS)
             if parent_keys_to_fetch:
                 parent_epic_details = {}
                 
@@ -1346,15 +1281,11 @@ class JiraAPI:
                             data = response.json()
                             issues = data.get('issues', []) or data.get('values', [])
                             
-                            
                             for issue in issues:
                                 story_key = issue.get('key')
                                 fields = issue.get('fields', {})
-                                story_summary = fields.get('summary', '')
                                 parent_field = fields.get('parent')
                                 
-                                
-                                # Get the story's parent (epic) summary
                                 epic_summary = ''
                                 if parent_field and isinstance(parent_field, dict):
                                     parent_fields = parent_field.get('fields', {})
@@ -1362,42 +1293,19 @@ class JiraAPI:
                                         epic_summary = parent_fields.get('summary', '')
                                         if not isinstance(epic_summary, str):
                                             epic_summary = str(epic_summary) if epic_summary else ''
-                                    else:
-                                        print(f"      ⚠ Parent exists but no fields returned")
-                                else:
-                                    print(f"      ⚠ No parent (epic) found for this story")
                                 
-                                # Store the epic summary for this story key
                                 parent_epic_details[story_key] = epic_summary
                             
                     except Exception as e:
-                        print(f"   ⚠ Exception fetching parent details: {type(e).__name__}: {e}")
-                        import traceback
-                        traceback.print_exc()
+                        print(f"Exception fetching parent details: {type(e).__name__}: {e}")
                 
-                # Update sub-task parent_epic_summary with their parent story's epic summary
-                updated_count = 0
                 for key, details in issue_details.items():
                     if details.get('is_subtask') and details.get('parent_key'):
                         parent_key = details['parent_key']
-                        project_key = details.get('project_key', '')
                         
-                        if project_key == 'DTEDC':
-                            # DTEDC sub-tasks: use parent's parent (story's epic)
-                            if parent_key in parent_epic_details:
-                                details['parent_epic_summary'] = parent_epic_details[parent_key]
-                                updated_count += 1
-                            else:
-                                print(f"   ⚠ No epic found for DTEDC sub-task {key} (parent: {parent_key})")
-                        else:
-                            # Default behavior for other projects: use parent's parent (story's epic)
-                            if parent_key in parent_epic_details:
-                                details['parent_epic_summary'] = parent_epic_details[parent_key]
-                                updated_count += 1
-                            else:
-                                print(f"   ⚠ No epic found for sub-task {key} (parent: {parent_key})")
+                        if parent_key in parent_epic_details:
+                            details['parent_epic_summary'] = parent_epic_details[parent_key]
             
-            # Clean up temporary fields and fill in any missing issues
             for key in unique_keys:
                 if key not in issue_details:
                     issue_details[key] = {
@@ -1407,27 +1315,42 @@ class JiraAPI:
                         'reporting_process': ''
                     }
                 else:
-                    # Remove temporary fields
                     issue_details[key].pop('parent_key', None)
                     issue_details[key].pop('is_subtask', None)
                     issue_details[key].pop('project_key', None)
-            
-            successful_fetches = len([v for v in issue_details.values() if v['type'] != 'Unknown'])
             
             return issue_details
         
         def export_to_csv_optimized(worklogs, issue_details_cache, filename):
             """
-            OPTIMIZED CSV EXPORT: Enhanced with parent epic summary and reporting process fields
+            OPTIMIZED CSV EXPORT: Enhanced with parent epic summary, reporting process fields,
+            and download button for user convenience
             """
             if not worklogs:
-                print("⚠️ No worklogs to export")
+                print("No worklogs to export")
                 return False
             
-            print(f"📄 Creating enhanced CSV export: {filename}")
-        
+            print(f"Creating enhanced CSV export: {filename}")
             
             try:
+                # Handle file versioning - add index if file exists
+                base_filename = filename
+                file_index = 1
+                
+                # Split filename and extension
+                if '.' in filename:
+                    name_part, ext_part = filename.rsplit('.', 1)
+                else:
+                    name_part, ext_part = filename, 'csv'
+                
+                # Check if file exists and create versioned filename
+                while os.path.exists(filename):
+                    filename = f"{name_part}_{file_index}.{ext_part}"
+                    file_index += 1
+                
+                if file_index > 1:
+                    print(f"File exists, creating new version: {filename}")
+                
                 # Format helper functions
                 def format_jira_date(date_str):
                     if not date_str:
@@ -1515,7 +1438,6 @@ class JiraAPI:
                 
                 # Write CSV using csv module for better handling
                 with open(filename, 'w', encoding='utf-8', newline='') as csvfile:
-                    # Enhanced fieldnames to include parent epic summary and reporting process
                     fieldnames = ['Author', 'Issue key', 'Project Key', 'Delivery Name', 'Issue type', 'Issue Summary',
                                 'Work log started', 'Work log created', 
                                 'Time spent', 'Comments']
@@ -1534,7 +1456,7 @@ class JiraAPI:
                             issue_key = worklog.get('issueKey', '')
                             project_key = issue_key.split('-')[0] if '-' in issue_key else ''
                             
-                            # Get issue details from pre-fetched cache (now includes enhanced fields)
+                            # Get issue details from pre-fetched cache
                             issue_info = issue_details_cache.get(issue_key, {
                                 'type': 'Unknown', 
                                 'summary': '',
@@ -1543,7 +1465,6 @@ class JiraAPI:
                             })
                             
                             # Set Delivery Name based on project key
-
                             if project_key == "HDEPS":
                                 delivery_name = issue_info.get('parent_epic_summary', '')
                             elif project_key == "DTEDC":
@@ -1574,20 +1495,47 @@ class JiraAPI:
                         except Exception as e:
                             print(f"   Warning: Skipped worklog due to error: {e}")
                             continue
+                
+                # Verify file was created
+                if os.path.exists(filename):
+                    file_size = os.path.getsize(filename)
+                    print(f"SUCCESS: Enhanced CSV file created at {filename}")
+                    print(f"File size: {file_size:,} bytes")
+                    print(f"Records exported: {processed}")
                     
-                    # Verify file was created
-                    if os.path.exists(filename):
-                        file_size = os.path.getsize(filename)
-                        print(f"✅ SUCCESS: Enhanced CSV file created at {filename}")
-                        print(f"✅ File size: {file_size:,} bytes")
-                        print(f"✅ Records exported: {processed}")
-                        return True
-                    else:
-                        print(f"❌ ERROR: File was not created at {filename}")
-                        return False
+                    # Create download button in Streamlit
+                    try:
+                        with open(filename, 'rb') as file:
+                            csv_data = file.read()
                         
+                        # Get absolute path for display
+                        abs_path = os.path.abspath(filename)
+                        
+                        # Create download button
+                        st.download_button(
+                            label="⬇️ Download CSV Report",
+                            data=csv_data,
+                            file_name=os.path.basename(filename),
+                            mime='text/csv',
+                            key=f'download_{filename}_{processed}'
+                        )
+                        
+                        st.success(f"CSV export completed: {processed} records exported")
+                        st.info(f"File also saved locally at: {abs_path}")
+                        
+                    except Exception as download_error:
+                        print(f"Could not create download button: {download_error}")
+                        st.warning(f"File saved locally at: {os.path.abspath(filename)}")
+                    
+                    return True
+                else:
+                    print(f"ERROR: File was not created at {filename}")
+                    return False
+                    
             except Exception as e:
-                print(f"❌ ERROR writing CSV: {e}")
+                print(f"ERROR writing CSV: {e}")
+                import traceback
+                traceback.print_exc()
                 return False
         
         # ============= MAIN EXECUTION LOGIC =============
@@ -1606,7 +1554,7 @@ class JiraAPI:
         all_projects = list(set(detected_projects + projects_from_issues))
         
         if not all_projects and not detected_issues:
-            print("❌ No valid project or issue keys found")
+            print("No valid project or issue keys found")
             return []
         
         session = create_optimized_session()
@@ -1647,7 +1595,7 @@ class JiraAPI:
                             print(f"✗ {project_key}: Failed - {e}")
             
             # Deduplication
-            print(f"\n📊 Deduplicating {len(all_worklogs)} worklogs...")
+            print(f"\nDeduplicating {len(all_worklogs)} worklogs...")
             seen_ids = set()
             unique_worklogs = []
             
@@ -1672,9 +1620,9 @@ class JiraAPI:
                         unique_worklogs.append(worklog)
             
             all_worklogs = unique_worklogs
-            print(f"✓ Deduplicated to {len(all_worklogs)} unique worklogs")
+            print(f"Deduplicated to {len(all_worklogs)} unique worklogs")
             
-            # PERFORMANCE OPTIMIZATION: Batch fetch all issue details ONCE (now with enhanced fields)
+            # Batch fetch all issue details ONCE
             if all_worklogs:
                 # Extract all unique issue keys from worklogs
                 all_issue_keys = list(set(wl.get('issueKey', '') for wl in all_worklogs if wl.get('issueKey')))
@@ -1687,11 +1635,9 @@ class JiraAPI:
                 export_success = export_to_csv_optimized(all_worklogs, issue_details_cache, csv_filename)
                 
                 if export_success:
-                    print(f"✅ Enhanced CSV export completed successfully")
-                    st.success(f"✅ Enhanced CSV export completed successfully")
+                    print(f"Enhanced CSV export completed successfully")
                 else:
-                    print(f"⚠️ CSV export encountered issues")
-                    st.warning(f"⚠️ CSV export encountered issues")
+                    print(f"CSV export encountered issues")
         finally:
             session.close()
         
@@ -3143,38 +3089,14 @@ def main():
                             # Format the current date
                             formatted_date = end_date.strftime("%Y-%m-%d")
 
-                            # Define the Downloads path and ensure it exists
-                            downloads_path = os.path.join(os.path.expanduser("~"), "Downloads")
-                            os.makedirs(downloads_path, exist_ok=True)
-
                             # Define the base file name and path
                             base_file_name = f"Jira_Worklogs_{formatted_date}.csv"
-                            base_file_path = os.path.join(downloads_path, base_file_name)
-
-                            # Check if the base file exists
-                            if os.path.exists(base_file_path):
-                                # Find the next available numbered copy
-                                copy_index = 1
-                                while True:
-                                    copy_file_name = f"Jira_Worklogs_{formatted_date}_{copy_index}.csv"
-                                    copy_file_path = os.path.join(downloads_path, copy_file_name)
-                                    if not os.path.exists(copy_file_path):
-                                        shutil.copy(base_file_path, copy_file_path)
-                                        print(f"File exists. A numbered copy has been created at: {copy_file_path}")
-                                        break
-                                    copy_index += 1
-                            else:
-                                # Create a new CSV file with example headers
-                                with open(base_file_path, 'w', newline='') as new_file:
-                                    writer = csv.writer(new_file)
-                                    writer.writerow(['Issue Key', 'Worklog Author', 'Time Spent', 'Date'])  # Example headers
-                                print(f"File does not exist. A new file has been created at: {base_file_path}")
 
 
                             # Use the updated path in your function
                             worklogs_data, csv_content = jira_api.get_worklogs(
                                 all_issue_keys,
-                                filename=base_file_path,
+                                filename=base_file_name,
                                 end_date=end_date
                             )
 
