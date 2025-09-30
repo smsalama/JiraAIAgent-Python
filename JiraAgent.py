@@ -1061,21 +1061,25 @@ class JiraAPI:
         def batch_fetch_issue_details(self, session, issue_keys):
             """
             PERFORMANCE OPTIMIZATION: Batch fetch issue details using the NEW JQL endpoint
-            Uses the LATEST Jira REST API v3 /search/jql endpoint (2025)
-            
-            IMPORTANT: The old /rest/api/3/search endpoint was deprecated and removed in August 2025.
-            This function now uses the new /rest/api/3/search/jql endpoint.
+            Enhanced to include parent epic summary and reporting process (customfield_12603)
+            Parent logic: 
+            - Story: uses parent (epic) summary
+            - Sub-task in HDEPS: uses direct parent (story) summary
+            - Sub-task in DTEDC: uses parent's parent (story's epic) summary
+            - Sub-task in other projects: uses parent's parent (story's epic) summary
             """
             issue_details = {}
             
             if not issue_keys:
                 return issue_details
             
-            print(f"📊 Batch fetching details for {len(issue_keys)} issues using NEW JQL endpoint...")
-            
             # Process in chunks of 100 issues (recommended for new endpoint)
             chunk_size = 100
             unique_keys = list(set(issue_keys))  # Remove duplicates
+            
+            # Store parent keys that need to be fetched for sub-tasks
+            parent_keys_to_fetch = set()
+            hdeps_parent_keys_to_fetch = set()  # Separate tracking for HDEPS subtasks
             
             for i in range(0, len(unique_keys), chunk_size):
                 chunk = unique_keys[i:i+chunk_size]
@@ -1084,39 +1088,32 @@ class JiraAPI:
                 key_list = ','.join(chunk)
                 jql = f"key in ({key_list})"
                 
-                print(f"🔍 JQL Query: {jql[:100]}{'...' if len(jql) > 100 else ''}")
                 
                 try:
-                    # Using NEW Jira REST API v3 search/jql endpoint (replaces deprecated /search)
+                    # Using NEW Jira REST API v3 search/jql endpoint
                     url = f"{self.base_url}/rest/api/3/search/jql"
                     
-                    # NEW endpoint uses different parameter structure
+                    # Enhanced fields to include epic and custom field
                     params = {
                         "jql": jql,
-                        "fields": "key,issuetype,summary",
+                        "fields": "key,issuetype,summary,parent,customfield_12603",
                         "maxResults": chunk_size,
                         "expand": ""
                     }
                     
-                    # The new endpoint uses GET method
                     response = session.get(url, params=params, timeout=30)
-                    
-                    print(f"📈 Response Status: {response.status_code}")
                     
                     if response.status_code == 200:
                         data = response.json()
                         
-                        # New endpoint response structure
-                        print(f"🔍 Response keys: {list(data.keys())}")
-                        
-                        # Check for API warnings or errors in response
+                        # Check for API warnings or errors
                         if 'warningMessages' in data and data['warningMessages']:
                             print(f"⚠️ API Warnings: {data['warningMessages']}")
                         
                         if 'errorMessages' in data and data['errorMessages']:
                             print(f"❌ API Errors in response: {data['errorMessages']}")
                         
-                        # Extract issues from new endpoint response
+                        # Extract issues from response
                         issues = data.get('issues', [])
                         values = data.get('values', [])  # Some versions use 'values'
                         if not issues and values:
@@ -1124,19 +1121,15 @@ class JiraAPI:
                         
                         total_found = data.get('total', len(issues))
                         
-                        print(f"📊 Found {len(issues)} issues (total: {total_found}) in response")
-                        
-                        # Debug: Print the raw structure of first issue
-                        if issues and len(issue_details) == 0:
-                            print(f"🔍 Sample issue structure: {list(issues[0].keys())}")
-                            if 'fields' in issues[0]:
-                                print(f"🔍 Sample fields structure: {list(issues[0]['fields'].keys())}")
-                        
+                        # Process issues and identify sub-tasks that need parent lookup
                         for issue in issues:
                             key = issue.get('key', 'NO_KEY')
                             fields = issue.get('fields', {})
                             
-                            # Extract issue type - handle different possible structures
+                            # Extract project key from issue key (e.g., "DTEDC-123" -> "DTEDC")
+                            project_key = key.split('-')[0] if '-' in key else ''
+                            
+                            # Extract issue type
                             issue_type = 'Unknown'
                             issuetype_field = fields.get('issuetype')
                             if issuetype_field:
@@ -1144,51 +1137,102 @@ class JiraAPI:
                                     issue_type = issuetype_field.get('name', 'Unknown')
                                 elif isinstance(issuetype_field, str):
                                     issue_type = issuetype_field
-                                else:
-                                    print(f"⚠️ Unexpected issuetype format for {key}: {type(issuetype_field)}")
                             
                             # Extract summary
-                            summary = fields.get('summary')
-                            if summary is None:
-                                summary = 'No summary available'
-                            elif not isinstance(summary, str):
+                            summary = fields.get('summary', 'No summary available')
+                            if not isinstance(summary, str):
                                 summary = str(summary)
                             
-                            issue_details[key] = {
-                                'type': issue_type,
-                                'summary': summary
-                            }
+                            # Extract parent info
+                            parent_field = fields.get('parent')
+                            parent_key = None
+                            parent_summary = ''
                             
-                            # Debug output for first few issues
-                            if len(issue_details) <= 3:
-                                print(f"🎯 {key}: type='{issue_type}', summary='{summary[:50]}...'")
-                        
-                        print(f"   ✓ Processed {min(i+len(chunk), len(unique_keys))}/{len(unique_keys)} issue details")
-                        
-                    elif response.status_code == 400:
-                        print(f"❌ Bad Request (400): Likely JQL syntax error with new endpoint")
-                        print(f"📄 Response: {response.text[:500]}")
-                        try:
-                            error_data = response.json()
-                            if 'errorMessages' in error_data:
-                                print(f"🔍 Error messages: {error_data['errorMessages']}")
-                            if 'errors' in error_data:
-                                print(f"🔍 Field errors: {error_data['errors']}")
-                        except:
-                            pass
+                            if parent_field and isinstance(parent_field, dict):
+                                parent_key = parent_field.get('key')
+                                parent_fields = parent_field.get('fields', {})
+                                if parent_fields:
+                                    parent_summary = parent_fields.get('summary', '')
+                                    if not isinstance(parent_summary, str):
+                                        parent_summary = str(parent_summary) if parent_summary else ''
+                                
+                            elif parent_field:
+                                print(f"   ⚠️ {key} has parent field but it's not a dict: {type(parent_field)}")
                             
-                    elif response.status_code == 401:
-                        print(f"❌ Unauthorized (401): Check authentication for new endpoint")
-                        print(f"📄 Response: {response.text[:200]}")
-                        
-                    elif response.status_code == 403:
-                        print(f"❌ Forbidden (403): Check permissions for new JQL endpoint")
-                        print(f"📄 Response: {response.text[:200]}")
-                        
-                    elif response.status_code == 410:
-                        print(f"❌ Gone (410): You may still be using the OLD deprecated endpoint!")
-                        print(f"📄 Current URL: {url}")
-                        print(f"📄 Response: {response.text[:200]}")
+                            # Determine if this is a sub-task
+                            issue_type_lower = issue_type.lower()
+                            is_subtask = 'sub-task' in issue_type_lower or 'subtask' in issue_type_lower
+                            
+                            # Extract reporting process (customfield_12603)
+                            reporting_process = ''
+                            custom_field = fields.get('customfield_12603')
+                            if custom_field:
+                                if isinstance(custom_field, dict):
+                                    # Handle different custom field formats
+                                    if 'value' in custom_field:
+                                        reporting_process = str(custom_field['value'])
+                                    elif 'name' in custom_field:
+                                        reporting_process = str(custom_field['name'])
+                                    elif 'displayName' in custom_field:
+                                        reporting_process = str(custom_field['displayName'])
+                                    else:
+                                        reporting_process = str(custom_field)
+                                elif isinstance(custom_field, list) and custom_field:
+                                    # Handle array of values
+                                    if isinstance(custom_field[0], dict):
+                                        reporting_process = ', '.join([
+                                            item.get('value') or item.get('name') or str(item) 
+                                            for item in custom_field
+                                        ])
+                                    else:
+                                        reporting_process = ', '.join(str(item) for item in custom_field)
+                                else:
+                                    reporting_process = str(custom_field)
+                            
+                            # Handle different project logic for sub-tasks
+                            if is_subtask and parent_key:
+                                if project_key == 'HDEPS':
+                                    # HDEPS: Need direct parent summary (task/service request/change request/incident)
+                                    # Check if we already have it from the parent field
+                                    if parent_summary:
+                                        issue_details[key] = {
+                                            'type': issue_type,
+                                            'summary': summary,
+                                            'parent_epic_summary': parent_summary,  # Direct parent summary
+                                            'reporting_process': reporting_process
+                                        }
+                                    else:
+                                        # Parent summary not available, need to fetch it
+                                        hdeps_parent_keys_to_fetch.add(parent_key)
+                                        issue_details[key] = {
+                                            'type': issue_type,
+                                            'summary': summary,
+                                            'parent_epic_summary': reporting_process,  # Will update with parent summary
+                                            'reporting_process': reporting_process,
+                                            'parent_key': parent_key,
+                                            'is_subtask': True,
+                                            'project_key': project_key
+                                        }
+                                else:
+                                    # DTEDC and others: Need to fetch parent's parent (epic)
+                                    parent_keys_to_fetch.add(parent_key)
+                                    issue_details[key] = {
+                                        'type': issue_type,
+                                        'summary': summary,
+                                        'parent_epic_summary': '',  # Will update later
+                                        'reporting_process': reporting_process,
+                                        'parent_key': parent_key,
+                                        'is_subtask': True,
+                                        'project_key': project_key
+                                    }
+                            else:
+                                # Stories and non-subtasks: use direct parent (epic) summary
+                                issue_details[key] = {
+                                    'type': issue_type,
+                                    'summary': summary,
+                                    'parent_epic_summary': parent_summary,
+                                    'reporting_process': reporting_process
+                                }
                         
                     else:
                         print(f"❌ Unexpected status: {response.status_code}")
@@ -1200,7 +1244,9 @@ class JiraAPI:
                             if key not in issue_details:
                                 issue_details[key] = {
                                     'type': 'Unknown', 
-                                    'summary': f'API Error {response.status_code}'
+                                    'summary': f'API Error {response.status_code}',
+                                    'parent_epic_summary': '',
+                                    'reporting_process': ''
                                 }
                         
                 except Exception as e:
@@ -1213,30 +1259,173 @@ class JiraAPI:
                         if key not in issue_details:
                             issue_details[key] = {
                                 'type': 'Unknown', 
-                                'summary': 'Request failed'
+                                'summary': 'Request failed',
+                                'parent_epic_summary': '',
+                                'reporting_process': ''
                             }
             
-            # Fill in any missing issues with defaults
+            # First, fetch parent summaries for HDEPS sub-tasks (they need direct parent summary)
+            if hdeps_parent_keys_to_fetch:
+                hdeps_parent_summaries = {}
+                
+                hdeps_parent_list = list(hdeps_parent_keys_to_fetch)
+                for i in range(0, len(hdeps_parent_list), chunk_size):
+                    chunk = hdeps_parent_list[i:i+chunk_size]
+                    key_list = ','.join(chunk)
+                    jql = f"key in ({key_list})"
+                    
+                    try:
+                        url = f"{self.base_url}/rest/api/3/search/jql"
+                        params = {
+                            "jql": jql,
+                            "fields": "key,summary",
+                            "maxResults": chunk_size,
+                            "expand": ""
+                        }
+                        
+                        response = session.get(url, params=params, timeout=30)
+                        
+                        if response.status_code == 200:
+                            data = response.json()
+                            issues = data.get('issues', []) or data.get('values', [])
+                            
+                            print(f"   📋 Processing {len(issues)} HDEPS parent stories...")
+                            
+                            for issue in issues:
+                                parent_key = issue.get('key')
+                                fields = issue.get('fields', {})
+                                parent_summary = fields.get('summary', '')
+                                
+                                if not isinstance(parent_summary, str):
+                                    parent_summary = str(parent_summary) if parent_summary else ''
+                                
+                                hdeps_parent_summaries[parent_key] = parent_summary
+                                print(f"      ✓ HDEPS parent {parent_key}: '{parent_summary[:50]}...'")
+                            
+                            print(f"   ✓ Fetched {len(hdeps_parent_summaries)} HDEPS parent summaries")
+                            
+                    except Exception as e:
+                        print(f"   ⚠ Exception fetching HDEPS parent details: {type(e).__name__}: {e}")
+                        import traceback
+                        traceback.print_exc()
+                
+                # Update HDEPS sub-tasks with their direct parent summaries
+                hdeps_updated = 0
+                for key, details in issue_details.items():
+                    if details.get('project_key') == 'HDEPS' and details.get('is_subtask'):
+                        parent_key = details.get('parent_key')
+                        if parent_key in hdeps_parent_summaries:
+                            details['parent_epic_summary'] = hdeps_parent_summaries[parent_key]
+                            hdeps_updated += 1
+                        else:
+                            print(f"   ⚠ HDEPS sub-task {key}: parent {parent_key} not found in summaries")
+                
+            
+            # Now fetch parent details for sub-tasks that need epic summaries (non-HDEPS)
+            if parent_keys_to_fetch:
+                parent_epic_details = {}
+                
+                parent_keys_list = list(parent_keys_to_fetch)
+                for i in range(0, len(parent_keys_list), chunk_size):
+                    chunk = parent_keys_list[i:i+chunk_size]
+                    key_list = ','.join(chunk)
+                    jql = f"key in ({key_list})"
+                    
+                    try:
+                        url = f"{self.base_url}/rest/api/3/search/jql"
+                        params = {
+                            "jql": jql,
+                            "fields": "key,parent,summary",
+                            "maxResults": chunk_size,
+                            "expand": ""
+                        }
+                        
+                        response = session.get(url, params=params, timeout=30)
+                        
+                        if response.status_code == 200:
+                            data = response.json()
+                            issues = data.get('issues', []) or data.get('values', [])
+                            
+                            
+                            for issue in issues:
+                                story_key = issue.get('key')
+                                fields = issue.get('fields', {})
+                                story_summary = fields.get('summary', '')
+                                parent_field = fields.get('parent')
+                                
+                                
+                                # Get the story's parent (epic) summary
+                                epic_summary = ''
+                                if parent_field and isinstance(parent_field, dict):
+                                    parent_fields = parent_field.get('fields', {})
+                                    if parent_fields:
+                                        epic_summary = parent_fields.get('summary', '')
+                                        if not isinstance(epic_summary, str):
+                                            epic_summary = str(epic_summary) if epic_summary else ''
+                                    else:
+                                        print(f"      ⚠ Parent exists but no fields returned")
+                                else:
+                                    print(f"      ⚠ No parent (epic) found for this story")
+                                
+                                # Store the epic summary for this story key
+                                parent_epic_details[story_key] = epic_summary
+                            
+                    except Exception as e:
+                        print(f"   ⚠ Exception fetching parent details: {type(e).__name__}: {e}")
+                        import traceback
+                        traceback.print_exc()
+                
+                # Update sub-task parent_epic_summary with their parent story's epic summary
+                updated_count = 0
+                for key, details in issue_details.items():
+                    if details.get('is_subtask') and details.get('parent_key'):
+                        parent_key = details['parent_key']
+                        project_key = details.get('project_key', '')
+                        
+                        if project_key == 'DTEDC':
+                            # DTEDC sub-tasks: use parent's parent (story's epic)
+                            if parent_key in parent_epic_details:
+                                details['parent_epic_summary'] = parent_epic_details[parent_key]
+                                updated_count += 1
+                            else:
+                                print(f"   ⚠ No epic found for DTEDC sub-task {key} (parent: {parent_key})")
+                        else:
+                            # Default behavior for other projects: use parent's parent (story's epic)
+                            if parent_key in parent_epic_details:
+                                details['parent_epic_summary'] = parent_epic_details[parent_key]
+                                updated_count += 1
+                            else:
+                                print(f"   ⚠ No epic found for sub-task {key} (parent: {parent_key})")
+            
+            # Clean up temporary fields and fill in any missing issues
             for key in unique_keys:
                 if key not in issue_details:
                     issue_details[key] = {
                         'type': 'Unknown', 
-                        'summary': 'Not found in any batch'
+                        'summary': 'Not found in any batch',
+                        'parent_epic_summary': '',
+                        'reporting_process': ''
                     }
+                else:
+                    # Remove temporary fields
+                    issue_details[key].pop('parent_key', None)
+                    issue_details[key].pop('is_subtask', None)
+                    issue_details[key].pop('project_key', None)
             
             successful_fetches = len([v for v in issue_details.values() if v['type'] != 'Unknown'])
-            print(f"🎯 Successfully fetched {successful_fetches}/{len(unique_keys)} issue details using NEW endpoint")
+            
             return issue_details
         
         def export_to_csv_optimized(worklogs, issue_details_cache, filename):
             """
-            OPTIMIZED CSV EXPORT: Uses pre-fetched issue details to avoid individual API calls
+            OPTIMIZED CSV EXPORT: Enhanced with parent epic summary and reporting process fields
             """
             if not worklogs:
                 print("⚠️ No worklogs to export")
                 return False
             
-            print(f"📄 Creating optimized CSV export: {filename}")
+            print(f"📄 Creating enhanced CSV export: {filename}")
+        
             
             try:
                 # Format helper functions
@@ -1326,8 +1515,10 @@ class JiraAPI:
                 
                 # Write CSV using csv module for better handling
                 with open(filename, 'w', encoding='utf-8', newline='') as csvfile:
-                    fieldnames = ['Author', 'Issue key', 'Project Key', 'Issue type', 'Issue Summary', 
-                                'Work log started', 'Work log created', 'Time spent', 'Comments']
+                    # Enhanced fieldnames to include parent epic summary and reporting process
+                    fieldnames = ['Author', 'Issue key', 'Project Key', 'Delivery Name', 'Issue type', 'Issue Summary',
+                                'Work log started', 'Work log created', 
+                                'Time spent', 'Comments']
                     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                     writer.writeheader()
                     
@@ -1343,17 +1534,33 @@ class JiraAPI:
                             issue_key = worklog.get('issueKey', '')
                             project_key = issue_key.split('-')[0] if '-' in issue_key else ''
                             
-                            # Get issue details from pre-fetched cache
-                            issue_info = issue_details_cache.get(issue_key, 
-                                        {'type': 'Unknown', 'summary': ''})
+                            # Get issue details from pre-fetched cache (now includes enhanced fields)
+                            issue_info = issue_details_cache.get(issue_key, {
+                                'type': 'Unknown', 
+                                'summary': '',
+                                'parent_epic_summary': '',
+                                'reporting_process': ''
+                            })
                             
-                            # Write row
+                            # Set Delivery Name based on project key
+
+                            if project_key == "HDEPS":
+                                delivery_name = issue_info.get('parent_epic_summary', '')
+                            elif project_key == "DTEDC":
+                                delivery_name = issue_info.get('parent_epic_summary', '')
+                            elif project_key == "DSTAR":
+                                delivery_name = "ARA"
+                            else:
+                                delivery_name = ""
+                            
+                            # Write row with enhanced fields
                             writer.writerow({
                                 'Author': author_name,
                                 'Issue key': issue_key,
                                 'Project Key': project_key,
-                                'Issue type': issue_info['type'],
-                                'Issue Summary': issue_info['summary'],
+                                'Delivery Name': delivery_name,
+                                'Issue type': issue_info.get('type', 'Unknown'),
+                                'Issue Summary': issue_info.get('summary', ''),
                                 'Work log started': format_jira_date(worklog.get('started', '')),
                                 'Work log created': format_jira_date(worklog.get('created', '')),
                                 'Time spent': convert_time_spent(worklog.get('timeSpent', '')),
@@ -1371,7 +1578,7 @@ class JiraAPI:
                     # Verify file was created
                     if os.path.exists(filename):
                         file_size = os.path.getsize(filename)
-                        print(f"✅ SUCCESS: CSV file created at {filename}")
+                        print(f"✅ SUCCESS: Enhanced CSV file created at {filename}")
                         print(f"✅ File size: {file_size:,} bytes")
                         print(f"✅ Records exported: {processed}")
                         return True
@@ -1467,12 +1674,12 @@ class JiraAPI:
             all_worklogs = unique_worklogs
             print(f"✓ Deduplicated to {len(all_worklogs)} unique worklogs")
             
-            # PERFORMANCE OPTIMIZATION: Batch fetch all issue details ONCE
+            # PERFORMANCE OPTIMIZATION: Batch fetch all issue details ONCE (now with enhanced fields)
             if all_worklogs:
                 # Extract all unique issue keys from worklogs
                 all_issue_keys = list(set(wl.get('issueKey', '') for wl in all_worklogs if wl.get('issueKey')))
                 
-                # Batch fetch all issue details at once
+                # Batch fetch all issue details with enhanced fields at once
                 issue_details_cache = batch_fetch_issue_details(self, session, all_issue_keys)
                 
                 # Export to CSV if filename provided
@@ -1480,8 +1687,8 @@ class JiraAPI:
                 export_success = export_to_csv_optimized(all_worklogs, issue_details_cache, csv_filename)
                 
                 if export_success:
-                    print(f"✅ CSV export completed successfully")
-                    st.success(f"✅ CSV export completed successfully")
+                    print(f"✅ Enhanced CSV export completed successfully")
+                    st.success(f"✅ Enhanced CSV export completed successfully")
                 else:
                     print(f"⚠️ CSV export encountered issues")
                     st.warning(f"⚠️ CSV export encountered issues")
@@ -2903,6 +3110,7 @@ def main():
                             start_date.strftime('%Y-%m-%d'),
                             end_date.strftime('%Y-%m-%d')
                         )
+
                         if issues:
                             status_text = st.empty()
                             # Process issues data with expanded fields
