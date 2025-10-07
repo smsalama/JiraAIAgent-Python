@@ -713,7 +713,7 @@ class JiraAPI:
         all_worklogs = []
         date_parsing_errors = 0
         
-        # Calculate month range from end_date
+        # Calculate month range from start date and end_date
         try:
             if isinstance(end_date, str):
                 end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date()
@@ -723,13 +723,25 @@ class JiraAPI:
                 end_date_obj = end_date
             else:
                 end_date_obj = datetime.strptime(str(end_date), '%Y-%m-%d').date()
-                
-            start_date_obj = start_date
-            start_date = start_date_obj.strftime('%Y-%m-%d')
+            
             end_date_str = end_date_obj.strftime('%Y-%m-%d')
             
         except Exception as e:
             raise ValueError(f"Invalid end_date format: {end_date}. Expected string 'YYYY-MM-DD' or date object. Error: {e}")
+        
+        try:
+            if isinstance(start_date, str):
+                start_date_obj = datetime.strptime(start_date, '%Y-%m-%d').date()
+            elif isinstance(start_date, datetime):
+                start_date_obj = start_date.date()
+            elif isinstance(start_date, date):
+                start_date_obj = start_date
+            else:
+                start_date_obj = datetime.strptime(str(start_date), '%Y-%m-%d').date()
+                
+            start_date = start_date_obj.strftime('%Y-%m-%d')
+        except Exception as e:
+            raise ValueError(f"Invalid end_date format: {start_date}. Expected string 'YYYY-MM-DD' or date object. Error: {e}")
         
         def detect_key_types(keys):
             """Intelligently detect if keys are project keys or issue keys"""
@@ -1401,49 +1413,49 @@ class JiraAPI:
                     except:
                         return str(date_str) if date_str else ""
                 
-                def convert_time_spent(time_str):
-                    if not time_str or str(time_str).strip() == '':
+                def convert_time_spent(time_seconds):
+                    """Convert time spent from seconds to hours with 2 decimal points"""
+                    if not time_seconds:
                         return ""
                     
                     try:
-                        time_str = str(time_str).strip().lower()
-                        total_hours = 0.0
+                        # Handle if time_seconds is a dictionary
+                        if isinstance(time_seconds, dict):
+                            # Try common dictionary keys for time values
+                            value = time_seconds.get('timeSpentSeconds', '')
+     
+                            
+                            if value is None:
+                                print(f"   Warning: Could not find time value in dict: {time_seconds}")
+                                return "0.00"
+                            
+                            time_seconds = value
                         
-                        # Parse days, hours, minutes
-                        if 'd' in time_str:
-                            parts = time_str.split()
-                            for part in parts:
-                                if 'd' in part:
-                                    days = float(part.replace('d', ''))
-                                    total_hours += days * 7.5
-                                elif 'h' in part:
-                                    hours = float(part.replace('h', ''))
-                                    total_hours += hours
-                                elif 'm' in part:
-                                    minutes = float(part.replace('m', ''))
-                                    total_hours += minutes / 60.0
-                        elif 'h' in time_str or 'm' in time_str:
-                            parts = time_str.split()
-                            for part in parts:
-                                if 'h' in part:
-                                    hours = float(part.replace('h', ''))
-                                    total_hours += hours
-                                elif 'm' in part:
-                                    minutes = float(part.replace('m', ''))
-                                    total_hours += minutes / 60.0
+                        # Handle if it's a list (take first element)
+                        if isinstance(time_seconds, list):
+                            if len(time_seconds) > 0:
+                                time_seconds = time_seconds[0]
+                            else:
+                                return "0.00"
                         
-                        if total_hours > 0:
-                            return f"{total_hours:.1f}" if total_hours != int(total_hours) else f"{int(total_hours)}"
+                        # Convert to string and strip whitespace
+                        time_str = str(time_seconds).strip()
                         
-                        try:
-                            num = float(time_str)
-                            return f"{num:.1f}" if num != int(num) else f"{int(num)}"
-                        except:
-                            pass
-                    except:
-                        pass
-                    
-                    return str(time_str)
+                        if time_str == '' or time_str.lower() == 'none':
+                            return ""
+                        
+                        # Convert to float (handles string or numeric input)
+                        seconds = float(time_str)
+                        
+                        # Convert seconds to hours
+                        total_hours = seconds / 3600.0
+                        
+                        # Format to 2 decimal places
+                        return f"{total_hours:.2f}"
+                        
+                    except (ValueError, TypeError, AttributeError) as e:
+                        print(f"   Warning: Could not convert time_seconds: {time_seconds} (type: {type(time_seconds)}), Error: {e}")
+                        return "0.00"
                 
                 def extract_comment(worklog):
                     comment = worklog.get('comment', '')
@@ -1522,7 +1534,7 @@ class JiraAPI:
                                 'Issue Summary': issue_info.get('summary', ''),
                                 'Work log started': format_jira_date(worklog.get('started', '')),
                                 'Work log created': format_jira_date(worklog.get('created', '')),
-                                'Time spent': convert_time_spent(worklog.get('timeSpent', '')),
+                                'Time spent': convert_time_spent(worklog.get('timeSpentSeconds', '')),
                                 'Comments': extract_comment(worklog)
                             })
                             
